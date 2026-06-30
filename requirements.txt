@@ -1,0 +1,45 @@
+# ── Core RAG pipeline ─────────────────────────────────────────────────────────
+# Document parsing (IBM Docling + GPU OCR)
+docling==2.107.0
+docling-core==2.85.0
+docling-ibm-models==3.13.3
+docling-parse==7.0.0
+
+# Text chunking
+semchunk==3.2.5
+
+# Embeddings (bge-m3 via local Ollama HTTP, no GPU import needed for inference)
+# Transformers kept for tokenizer length checks:
+transformers==5.12.1
+huggingface_hub==1.21.0
+
+# Numeric / vector math
+numpy==2.5.0
+scipy==1.18.0
+
+# PDF page rendering to PNG
+PyMuPDF==1.27.2.3
+pillow==12.2.0
+
+# MCP server (FastMCP)
+mcp==1.28.1
+uvicorn==0.49.0
+
+# HTTP (Deepgram STT call inside rag_mcp.py)
+httpx==0.28.1
+requests==2.34.2
+
+# Utilities
+psutil==7.2.2
+python-dotenv==1.2.2
+tqdm==4.68.3
+rich==15.0.0
+pywin32==312          # Windows keep-awake + single-instance lock (msvcrt)
+
+# ── GPU acceleration for Docling (CUDA 12.8) ──────────────────────────────────
+# Install separately with the CUDA index URL:
+#   pip install torch==2.11.0+cu128 torchvision==0.26.0+cu128 \
+#       --index-url https://download.pytorch.org/whl/cu128
+# Without GPU, Docling falls back to CPU (slow but functional).
+# accelerate is needed for multi-GPU / half-precision inference:
+#   pip install accelerate==1.14.0

@@ -1,0 +1,40 @@
+# ── Virtual environment ───────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Python cache ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ── Index / database (never commit – lives at C:\RAGData) ────────────────────
+*.f32
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+ingest.lock
+docling_attempted.txt
+refresh_current.txt
+docling_poison.txt
+
+# ── Rendered page images ──────────────────────────────────────────────────────
+renders/
+
+# ── All log files ─────────────────────────────────────────────────────────────
+*.log
+*.log.err
+*.err
+
+# ── Secrets / environment ─────────────────────────────────────────────────────
+.env
+*.env
+secrets.*
+
+# ── Windows noise ─────────────────────────────────────────────────────────────
+Thumbs.db
+desktop.ini
+
+# ── Temporary files ───────────────────────────────────────────────────────────
+_reply.mp3
+*.tmp
