@@ -1,0 +1,186 @@
+r"""Retrieval orchestrator (spec §7, §9, §12–§15, §17, §74).
+
+One orchestrator, specialized tools (§58). Per the routed mode's policy it
+activates only the components required:
+
+  FAST:      exact-ID -> (sparse ∥ dense) -> RRF -> tiny evidence set
+  DEEP:      + broader candidates, graph 1-hop, source expansion, verifier
+  FULLSWING: + wider still, graph 2-hop, second-pass retrieval on evidence gaps
+
+Sparse and dense legs run in parallel threads (§74) — they touch different
+stores (SQLite FTS vs memmap/Qdrant) so this is safe and roughly halves
+retrieval latency. Fusion is Reciprocal Rank Fusion (k=60), the proven
+default; alternatives are a benchmark decision (§17).
+"""
+
+from __future__ import annotations
+
+import concurrent.futures
+import time
+
+from .config import Config, RetrievalPolicy
+from .instrument import Trace
+from .manifest import Manifest
+
+
+def rrf_fuse(result_lists: list[list[dict]], k: int = 60,
+             weights: dict[str, float] | None = None) -> list[dict]:
+    """Reciprocal Rank Fusion across retriever outputs.
+    score = Σ w_source / (k + rank). Exact-ID hits get a strong default weight
+    so a matching drawing/document code cannot be buried by prose (§9)."""
+    weights = weights or {"exact": 2.0, "sparse": 1.0, "dense": 1.0, "graph": 0.7}
+    fused: dict[int, dict] = {}
+    for results in result_lists:
+        for rank, r in enumerate(results, 1):
+            w = weights.get(r.get("source", ""), 1.0)
+            e = fused.setdefault(r["chunk_id"], {"chunk_id": r["chunk_id"],
+                                                 "score": 0.0, "sources": []})
+            e["score"] += w / (k + rank)
+            if r.get("source") not in e["sources"]:
+                e["sources"].append(r.get("source"))
+    return sorted(fused.values(), key=lambda x: -x["score"])
+
+
+class Retriever:
+    def __init__(self, cfg: Config, mf: Manifest, sparse, dense, graph, embedder):
+        self.cfg = cfg
+        self.mf = mf
+        self.sparse = sparse
+        self.dense = dense
+        self.graph = graph
+        self.embedder = embedder
+
+    # ------------------------------------------------------------ helpers
+    def known_projects(self) -> list[str]:
+        return [r[0] for r in self.mf.con.execute(
+            "SELECT DISTINCT project FROM files WHERE project != 'UNKNOWN'")]
+
+    def _chunks_for_project(self, project: str) -> set[int]:
+        return {r[0] for r in self.mf.con.execute(
+            "SELECT c.chunk_id FROM chunks c JOIN files f ON f.file_id=c.file_id "
+            "WHERE f.project=?", (project,))}
+
+    def hydrate(self, hits: list[dict]) -> list[dict]:
+        """Attach chunk text + full provenance to fused hits."""
+        out = []
+        for h in hits:
+            row = self.mf.chunk(h["chunk_id"])
+            if row is None:
+                continue
+            out.append({**h, "text": row["text"], "page": row["page"],
+                        "locator": row["locator"], "filename": row["filename"],
+                        "path": row["original_path"], "project": row["project"],
+                        "revision": row["revision"],
+                        "document_type": row["document_type"],
+                        "superseded_by": row["superseded_by"],
+                        "file_id": row["file_id"], "level": row["level"],
+                        "ord": row["ord"], "parent_ord": row["parent_ord"]})
+        return out
+
+    def expand_source(self, hit: dict, radius: int = 1) -> str:
+        """Source expansion (§12): pull neighboring chunks of a hit so DEEP
+        reads context, not an isolated fragment."""
+        rows = self.mf.con.execute(
+            "SELECT text FROM chunks WHERE file_id=? AND ord BETWEEN ? AND ? "
+            "ORDER BY ord", (hit["file_id"], hit["ord"] - radius, hit["ord"] + radius)
+        ).fetchall()
+        return "\n".join(r[0] for r in rows)
+
+    # ------------------------------------------------------------ main entry
+    def retrieve(self, query: str, policy: RetrievalPolicy, trace: Trace,
+                 project: str | None = None,
+                 exact_ids: list[str] | None = None) -> list[dict]:
+        legs: list[list[dict]] = []
+
+        # exact-ID leg first — cheap, deterministic, and decisive when it hits.
+        # Gated on sparse_k so a dense-only baseline (§86) disables ALL lexical legs.
+        t0 = time.perf_counter()
+        exact_hits = (self.sparse.search_ids(query, k=policy.sparse_k)
+                      if exact_ids and policy.sparse_k > 0 else [])
+        trace.stage("exact_search", time.perf_counter() - t0,
+                    {"hits": len(exact_hits)})
+        if exact_hits:
+            legs.append(exact_hits)
+
+        allowed = None
+        if project:
+            allowed = self._chunks_for_project(project)
+
+        # sparse ∥ dense (§74)
+        def _sparse():
+            t = time.perf_counter()
+            if policy.sparse_k <= 0:
+                return [], time.perf_counter() - t
+            r = self.sparse.search(query, k=policy.sparse_k, project=project)
+            return r, time.perf_counter() - t
+
+        def _dense():
+            t = time.perf_counter()
+            te = time.perf_counter()
+            qvec = self.embedder.embed([query])[0]
+            embed_s = time.perf_counter() - te
+            try:
+                r = self.dense.search(qvec, k=policy.dense_k, project=project)
+            except TypeError:
+                r = self.dense.search(qvec, k=policy.dense_k,
+                                      allowed_chunks=allowed)
+            return r, time.perf_counter() - t, embed_s
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+            fs = ex.submit(_sparse)
+            fd = ex.submit(_dense)
+            sparse_hits, sparse_s = fs.result()
+            dense_hits, dense_s, embed_s = fd.result()
+        trace.stage("embedding", embed_s)
+        trace.stage("sparse_search", sparse_s, {"hits": len(sparse_hits)})
+        trace.stage("dense_search", dense_s, {"hits": len(dense_hits)})
+        legs.append(sparse_hits)
+        legs.append(dense_hits)
+
+        # graph leg — only when the policy asks for hops AND we have seeds (§9)
+        if policy.graph_hops > 0:
+            t0 = time.perf_counter()
+            seeds = (exact_ids or []) + ([project] if project else [])
+            if not seeds:
+                seeds = [w for w in query.split() if len(w) > 3][:4]
+            hood = self.graph.neighborhood(seeds, hops=policy.graph_hops)
+            graph_hits = [{"chunk_id": cid, "score": 1.0, "source": "graph"}
+                          for cid in hood["chunk_ids"][:policy.sparse_k]]
+            trace.stage("graph_search", time.perf_counter() - t0,
+                        {"hits": len(graph_hits), "edges": len(hood["edges"])})
+            if graph_hits:
+                legs.append(graph_hits)
+
+        # fusion
+        t0 = time.perf_counter()
+        fused = rrf_fuse(legs)[:policy.fused_k]
+        hydrated = self.hydrate(fused)
+        if allowed is not None:
+            hydrated = [h for h in hydrated if h["chunk_id"] in allowed] or hydrated
+        trace.stage("fusion", time.perf_counter() - t0, {"fused": len(hydrated)})
+
+        # optional rerank (DEEP/FULLSWING). Placeholder = lexical-overlap
+        # scoring; a cross-encoder goes here only if the benchmark proves the
+        # latency is paid back in accuracy (§37).
+        if policy.rerank and hydrated:
+            t0 = time.perf_counter()
+            hydrated = _overlap_rerank(query, hydrated)
+            trace.stage("rerank", time.perf_counter() - t0)
+
+        return hydrated[:policy.evidence_k]
+
+
+def _overlap_rerank(query: str, hits: list[dict]) -> list[dict]:
+    """Cheap, deterministic secondary signal: fraction of distinct query terms
+    present in the chunk. Combined with fused score to break near-ties without
+    an extra model in VRAM (§35/§37)."""
+    qterms = {w.lower() for w in query.split() if len(w) > 2}
+    if not qterms:
+        return hits
+    rescored = []
+    for h in hits:
+        tl = h["text"].lower()
+        overlap = sum(1 for w in qterms if w in tl) / len(qterms)
+        rescored.append({**h, "rerank_score": round(overlap, 3),
+                         "score": h["score"] * (1.0 + overlap)})
+    return sorted(rescored, key=lambda x: -x["score"])
