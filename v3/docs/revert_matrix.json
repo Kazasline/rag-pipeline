@@ -3,55 +3,55 @@
     "id": "F5-1",
     "status": "RED",
     "desc": "project-name-only evidence can be SUPPORTED",
-    "tail": "1 failed, 192 passed, 1 warning in 13.94s"
+    "tail": "1 failed, 192 passed, 1 warning in 10.85s"
   },
   {
     "id": "N4-1",
     "status": "RED",
     "desc": "measurement loosens instead of tightening the floor",
-    "tail": "1 failed, 101 passed, 1 warning in 2.76s"
+    "tail": "1 failed, 101 passed, 1 warning in 2.59s"
   },
   {
     "id": "F5-6",
     "status": "RED",
     "desc": "document frequencies never reach the verifier (wiring, not helper)",
-    "tail": "1 failed, 168 passed, 1 warning in 12.98s"
+    "tail": "1 failed, 168 passed, 1 warning in 10.77s"
   },
   {
     "id": "N4-8",
     "status": "RED",
     "desc": "_term_stats helper itself disabled",
-    "tail": "1 failed, 124 passed, 1 warning in 4.13s"
+    "tail": "1 failed, 124 passed, 1 warning in 4.12s"
   },
   {
     "id": "F5-6b",
     "status": "RED",
     "desc": "the 'unmeasured' disclosure can claim measurement it never had",
-    "tail": "1 failed, 169 passed, 1 warning in 12.75s"
+    "tail": "1 failed, 169 passed, 1 warning in 13.15s"
   },
   {
     "id": "R3-3",
     "status": "RED",
     "desc": "floor gates the set instead of filtering per item",
-    "tail": "1 failed, 40 passed, 1 warning in 1.48s"
+    "tail": "1 failed, 40 passed, 1 warning in 1.56s"
   },
   {
     "id": "R3-12a",
     "status": "RED",
     "desc": "stopwords not removed from content terms",
-    "tail": "1 failed, 95 passed, 1 warning in 2.85s"
+    "tail": "1 failed, 95 passed, 1 warning in 2.72s"
   },
   {
     "id": "R3-12b",
     "status": "RED",
     "desc": "a single shared term is enough",
-    "tail": "1 failed, 95 passed, 1 warning in 2.83s"
+    "tail": "1 failed, 95 passed, 1 warning in 2.66s"
   },
   {
     "id": "N4-4",
     "status": "RED",
     "desc": "naming a file certifies arbitrary content as SUPPORTED",
-    "tail": "1 failed, 193 passed, 1 warning in 13.29s"
+    "tail": "1 failed, 193 passed, 1 warning in 12.64s"
   },
   {
     "id": "N4-5",
@@ -63,235 +63,339 @@
     "id": "R3-2a",
     "status": "RED",
     "desc": "revision tokens count as document identifiers",
-    "tail": "1 failed, 94 passed, 1 warning in 2.55s"
+    "tail": "1 failed, 94 passed, 1 warning in 2.44s"
   },
   {
     "id": "R3-2b",
     "status": "RED",
     "desc": "a code mentioned in the body certifies the document",
-    "tail": "1 failed, 95 passed, 1 warning in 2.73s"
+    "tail": "1 failed, 95 passed, 1 warning in 2.61s"
   },
   {
     "id": "F5-2",
     "status": "RED",
     "desc": "code variants not indexed, so the exact leg misses real filenames",
-    "tail": "1 failed, 154 passed, 1 warning in 10.16s"
+    "tail": "1 failed, 154 passed, 1 warning in 10.19s"
   },
   {
     "id": "F5-2b",
     "status": "RED",
     "desc": "filename code variants not indexed",
-    "tail": "1 failed, 154 passed, 1 warning in 10.38s"
+    "tail": "1 failed, 154 passed, 1 warning in 9.99s"
   },
   {
     "id": "N4-3b",
     "status": "RED",
     "desc": "total code-variant bound removed (index-time work unbounded)",
-    "tail": "1 failed, 160 passed, 1 warning in 11.30s"
+    "tail": "1 failed, 160 passed, 1 warning in 10.69s"
   },
   {
     "id": "F3a",
     "status": "RED",
     "desc": "project filter fails open",
-    "tail": "1 failed, 32 passed, 1 warning in 1.12s"
+    "tail": "1 failed, 32 passed, 1 warning in 1.02s"
   },
   {
     "id": "F3b",
     "status": "RED",
     "desc": "exact-ID leg unscoped",
-    "tail": "1 failed, 33 passed, 1 warning in 1.13s"
+    "tail": "1 failed, 33 passed, 1 warning in 1.12s"
   },
   {
     "id": "F3c",
     "status": "RED",
     "desc": "re-inference leaves FTS project labels stale",
-    "tail": "1 failed, 34 passed, 1 warning in 1.31s"
+    "tail": "1 failed, 34 passed, 1 warning in 1.11s"
   },
   {
     "id": "N4-2",
     "status": "RED",
     "desc": "unattributed evidence merged with a named project",
-    "tail": "1 failed, 72 passed, 1 warning in 2.26s"
+    "tail": "1 failed, 72 passed, 1 warning in 2.30s"
   },
   {
     "id": "F5-5a",
     "status": "RED",
     "desc": "escalation ignores monetary evidence",
-    "tail": "1 failed, 72 passed, 1 warning in 2.42s"
+    "tail": "1 failed, 162 passed, 1 warning in 10.46s"
   },
   {
     "id": "F5-5b",
-    "status": "RED",
+    "status": "GREEN",
     "desc": "escalation ignores dates in evidence",
-    "tail": "1 failed, 173 passed, 1 warning in 12.66s"
+    "tail": "276 passed, 1 warning in 14.05s"
   },
   {
     "id": "F5-5c",
-    "status": "RED",
+    "status": "GREEN",
     "desc": "escalation ignores quantities in evidence",
-    "tail": "1 failed, 133 passed, 1 warning in 10.10s"
+    "tail": "276 passed, 1 warning in 12.71s"
   },
   {
     "id": "F5-5d",
     "status": "RED",
     "desc": "the query-side sensitive-intent trigger is dead",
-    "tail": "1 failed, 175 passed, 1 warning in 11.91s"
+    "tail": "1 failed, 175 passed, 1 warning in 11.55s"
   },
   {
     "id": "R6-1",
-    "status": "RED",
-    "desc": "safety walk skips excluded dirs instead of classifying them",
-    "tail": "1 failed, 54 passed, 1 warning in 2.11s"
+    "status": "STALE",
+    "desc": "safety walk skips excluded dirs instead of classifying them"
   },
   {
     "id": "R6-1b",
     "status": "RED",
     "desc": "an excluded dir holding DOCUMENTS does not fail",
-    "tail": "1 failed, 176 passed, 1 warning in 12.87s"
+    "tail": "1 failed, 176 passed, 1 warning in 12.62s"
   },
   {
     "id": "R6-2",
-    "status": "RED",
-    "desc": "a figure/date question is answerable from evidence with neither",
-    "tail": "1 failed, 178 passed, 1 warning in 12.99s"
+    "status": "STALE",
+    "desc": "a figure/date question is answerable from evidence with neither"
   },
   {
     "id": "R6-2b",
-    "status": "RED",
-    "desc": "the shape check widens to non-quantitative questions",
-    "tail": "1 failed, 175 passed, 1 warning in 12.11s"
+    "status": "STALE",
+    "desc": "the shape check widens to non-quantitative questions"
   },
   {
     "id": "R6-3",
     "status": "RED",
     "desc": "bare numbers indexed as document identifiers",
-    "tail": "1 failed, 185 passed, 1 warning in 11.07s"
+    "tail": "1 failed, 185 passed, 1 warning in 13.09s"
   },
   {
     "id": "R6-3b",
     "status": "RED",
     "desc": "query-side codes not expanded to variants",
-    "tail": "1 failed, 187 passed, 1 warning in 13.18s"
+    "tail": "1 failed, 187 passed, 1 warning in 13.13s"
+  },
+  {
+    "id": "R7-1",
+    "status": "RED",
+    "desc": "shape check accepts any shape for any question",
+    "tail": "1 failed, 178 passed, 1 warning in 12.52s"
+  },
+  {
+    "id": "R7-1b",
+    "status": "RED",
+    "desc": "date questions accept anything",
+    "tail": "1 failed, 182 passed, 1 warning in 12.79s"
+  },
+  {
+    "id": "R7-3",
+    "status": "RED",
+    "desc": "unrecognised extensions in an excluded dir are excused",
+    "tail": "1 failed, 199 passed, 1 warning in 13.44s"
+  },
+  {
+    "id": "R7-3b",
+    "status": "GREEN",
+    "desc": "the volatile-extension list is emptied",
+    "tail": "276 passed, 1 warning in 11.21s"
+  },
+  {
+    "id": "R7-5",
+    "status": "RED",
+    "desc": "an excluded-dir match reads the filename as a directory",
+    "tail": "1 failed, 210 passed, 1 warning in 11.84s"
+  },
+  {
+    "id": "R7-6",
+    "status": "RED",
+    "desc": "moves are never classified against excluded dirs",
+    "tail": "1 failed, 211 passed, 1 warning in 13.31s"
+  },
+  {
+    "id": "R7-6b",
+    "status": "GREEN",
+    "desc": "a document rename is excused as rotation",
+    "tail": "276 passed, 1 warning in 13.84s"
+  },
+  {
+    "id": "R7-7",
+    "status": "RED",
+    "desc": "retrieval does not expand query codes to variants",
+    "tail": "1 failed, 213 passed, 1 warning in 14.08s"
+  },
+  {
+    "id": "R7-8",
+    "status": "RED",
+    "desc": "bare numbers and dates indexed as exact ids",
+    "tail": "1 failed, 214 passed, 1 warning in 13.11s"
+  },
+  {
+    "id": "R7-8b",
+    "status": "GREEN",
+    "desc": "retrieval looks up non-identifier tokens",
+    "tail": "276 passed, 1 warning in 11.27s"
+  },
+  {
+    "id": "RV7-2",
+    "status": "RED",
+    "desc": "our own writes inside an excluded dir get excused",
+    "tail": "1 failed, 55 passed, 1 warning in 2.12s"
+  },
+  {
+    "id": "RV7-6",
+    "status": "RED",
+    "desc": "the walk descends into the workspace",
+    "tail": "1 failed, 218 passed, 1 warning in 11.37s"
+  },
+  {
+    "id": "RV7-7",
+    "status": "GREEN",
+    "desc": "refused writes counted as ours",
+    "tail": "276 passed, 1 warning in 14.25s"
+  },
+  {
+    "id": "RV7-8",
+    "status": "RED",
+    "desc": "the CLI stops warning that volatile_patterns is ignored",
+    "tail": "1 failed, 220 passed, 1 warning in 12.26s"
+  },
+  {
+    "id": "RV7-13",
+    "status": "GREEN",
+    "desc": "the shape check reads only the first evidence item",
+    "tail": "276 passed, 1 warning in 10.99s"
+  },
+  {
+    "id": "RV7-16",
+    "status": "RED",
+    "desc": "unseparated codes are no longer indexed",
+    "tail": "1 failed, 215 passed, 1 warning in 10.62s"
+  },
+  {
+    "id": "RV7-17",
+    "status": "GREEN",
+    "desc": "harvest_ids stops requiring a digit",
+    "tail": "276 passed, 1 warning in 11.76s"
+  },
+  {
+    "id": "RV7-18",
+    "status": "GREEN",
+    "desc": "the exact-ID row cap is removed",
+    "tail": "276 passed, 1 warning in 11.39s"
   },
   {
     "id": "RV-6",
     "status": "RED",
     "desc": "MAX_CODE_VARIANTS raised to infinity",
-    "tail": "1 failed, 186 passed, 1 warning in 12.36s"
+    "tail": "1 failed, 186 passed, 1 warning in 11.94s"
   },
   {
     "id": "RV-8",
     "status": "RED",
     "desc": "second-pass re-verify loses known_projects",
-    "tail": "1 failed, 188 passed, 1 warning in 10.92s"
+    "tail": "1 failed, 188 passed, 1 warning in 11.57s"
   },
   {
     "id": "RV-9",
-    "status": "RED",
-    "desc": "excluded-dir match becomes leaf-only",
-    "tail": "1 failed, 54 passed, 1 warning in 1.77s"
+    "status": "STALE",
+    "desc": "excluded-dir match becomes leaf-only"
   },
   {
     "id": "RV-10",
     "status": "RED",
     "desc": "dense leg loses pre-fusion project scoping",
-    "tail": "1 failed, 189 passed, 1 warning in 10.13s"
+    "tail": "1 failed, 189 passed, 1 warning in 12.33s"
   },
   {
     "id": "RV-13",
     "status": "RED",
     "desc": "exact leg stops preferring filename hits over body mentions",
-    "tail": "1 failed, 190 passed, 1 warning in 10.97s"
+    "tail": "1 failed, 190 passed, 1 warning in 11.75s"
   },
   {
     "id": "R3-1",
     "status": "RED",
     "desc": "cross-project consent inferred from ordinary questions",
-    "tail": "1 failed, 85 passed, 1 warning in 2.04s"
+    "tail": "1 failed, 85 passed, 1 warning in 2.50s"
   },
   {
     "id": "N4-4b",
     "status": "RED",
     "desc": "graph leg unscoped before fusion",
-    "tail": "1 failed, 35 passed, 1 warning in 1.10s"
+    "tail": "1 failed, 35 passed, 1 warning in 1.26s"
   },
   {
     "id": "EXACT-LEG",
     "status": "RED",
     "desc": "exact-ID retrieval leg disabled entirely",
-    "tail": "1 failed, 155 passed, 1 warning in 10.14s"
+    "tail": "1 failed, 155 passed, 1 warning in 11.22s"
   },
   {
     "id": "N4-6a",
     "status": "RED",
     "desc": "the volatile allowlist comes back",
-    "tail": "1 failed, 110 passed, 1 warning in 3.44s"
+    "tail": "1 failed, 110 passed, 1 warning in 3.07s"
   },
   {
     "id": "N4-6c",
     "status": "RED",
     "desc": "audit certifies a run it should refuse",
-    "tail": "1 failed, 194 passed, 1 warning in 11.30s"
+    "tail": "1 failed, 194 passed, 1 warning in 12.75s"
   },
   {
     "id": "N4-6d",
     "status": "RED",
     "desc": "audit certifies despite documents changing in an excluded dir",
-    "tail": "1 failed, 195 passed, 1 warning in 11.82s"
+    "tail": "1 failed, 195 passed, 1 warning in 12.92s"
   },
   {
     "id": "R3-7b",
     "status": "RED",
     "desc": "clean pass indistinguishable from one carried by exclusions",
-    "tail": "1 failed, 54 passed, 1 warning in 1.86s"
+    "tail": "1 failed, 54 passed, 1 warning in 1.87s"
   },
   {
     "id": "HASH",
     "status": "RED",
     "desc": "snapshot hashes not recorded",
-    "tail": "1 failed, 107 passed, 1 warning in 3.02s"
+    "tail": "1 failed, 107 passed, 1 warning in 2.64s"
   },
   {
     "id": "N4-9",
     "status": "RED",
     "desc": "project_source missing from citations",
-    "tail": "1 failed, 147 passed, 1 warning in 9.54s"
+    "tail": "1 failed, 147 passed, 1 warning in 10.24s"
   },
   {
     "id": "F5-7",
     "status": "RED",
     "desc": "re-inference forges project_source",
-    "tail": "1 failed, 170 passed, 1 warning in 12.12s"
+    "tail": "1 failed, 170 passed, 1 warning in 13.17s"
   },
   {
     "id": "PCT",
     "status": "RED",
     "desc": "project_unknown_pct hardcoded",
-    "tail": "1 failed, 172 passed, 1 warning in 11.53s"
+    "tail": "1 failed, 172 passed, 1 warning in 12.75s"
   },
   {
     "id": "N4-10",
     "status": "RED",
     "desc": "unattributed sources scored as correct",
-    "tail": "1 failed, 148 passed, 1 warning in 8.98s"
+    "tail": "1 failed, 148 passed, 1 warning in 9.89s"
   },
   {
     "id": "WPR",
     "status": "RED",
     "desc": "wrong-project gate accepts any rate",
-    "tail": "1 failed, 171 passed, 1 warning in 12.03s"
+    "tail": "1 failed, 171 passed, 1 warning in 13.65s"
   },
   {
     "id": "N5",
     "status": "RED",
     "desc": "duplicate benchmark questions accepted",
-    "tail": "1 failed, 108 passed, 1 warning in 3.17s"
+    "tail": "1 failed, 108 passed, 1 warning in 3.18s"
   },
   {
     "id": "N6",
     "status": "RED",
     "desc": "quality gates need no sample",
-    "tail": "1 failed, 76 passed, 1 warning in 2.21s"
+    "tail": "1 failed, 76 passed, 1 warning in 2.25s"
   },
   {
     "id": "N7",
@@ -303,18 +407,18 @@
     "id": "R3-8",
     "status": "RED",
     "desc": "project label sync fails silently",
-    "tail": "1 failed, 116 passed, 1 warning in 2.97s"
+    "tail": "1 failed, 116 passed, 1 warning in 2.89s"
   },
   {
     "id": "R3-9",
     "status": "RED",
     "desc": "degraded lexical leg invisible",
-    "tail": "1 failed, 121 passed, 1 warning in 3.06s"
+    "tail": "1 failed, 121 passed, 1 warning in 3.27s"
   },
   {
     "id": "R3-10",
     "status": "RED",
     "desc": "tiebreak uses its own tokenizer",
-    "tail": "1 failed, 35 passed, 1 warning in 1.16s"
+    "tail": "1 failed, 35 passed, 1 warning in 1.25s"
   }
 ]

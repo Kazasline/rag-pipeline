@@ -960,3 +960,32 @@ LESSON: recorded as a standing caveat rather than a fixed defect. A matrix
 authored by the builder can only establish that the builder's imagination was
 exhausted. The headline number belongs next to the reviewer's green rate, not
 on its own — REVERT_MATRIX.md now says so.
+
+
+**F-V3-55 / test coverage / the matrix caught my own matrix** — the round-7 run
+reported 9 GREEN and 4 STALE, and four of the green rows were mutations I had
+written tests for hours earlier in the same round. Diagnosing each was more
+useful than any of the fixes:
+
+* `R7-3b` and `RV7-7` were **no-op mutations**. `_VOLATILE_EXTS = () or (...)`
+  evaluates to the original tuple, and `"refused".endswith("write")` is False,
+  so neither mutation changed behaviour. They reported GREEN while testing
+  nothing. A mutation that does not mutate is indistinguishable in the output
+  from a fix that is not guarded.
+* `RV7-17`'s test asserted `harvest_ids("LANDSCAPE SPECIFICATION") == []` —
+  but ID_RE never matches an unhyphenated word at all, so the digit rule it
+  meant to exercise was unreachable from that input. `SITE-PLAN` reaches it.
+* `RV7-13`'s test put a figureless item first and a money item second — but the
+  relevance floor DROPPED the figureless item before the shape check ran, so
+  the "reads only the first item" mutation had nothing to change. Both items
+  now survive the floor.
+* `F5-5b`/`F5-5c` were redundant against their own tests: the queries contained
+  "date" and "period", which `SENSITIVE_INTENT` matches on its own, so removing
+  `DATE_RE`/`QUANTITY_RE` from the evidence check altered nothing. The isolating
+  tests use a query with no sensitive vocabulary at all.
+
+LESSON: a GREEN row has now meant four different things across three rounds —
+untested fix, unreachable code, no-op mutation, and unreachable test input. The
+matrix reports a symptom, not a diagnosis, and every green row needs to be
+understood before it is fixed. Two rounds ago I treated GREEN as "write a
+test"; that would have been wrong for three of these five.

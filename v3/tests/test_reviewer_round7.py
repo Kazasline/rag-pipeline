@@ -241,7 +241,9 @@ def test_unseparated_codes_are_still_indexed(tmp_path: Path):
 def test_pure_words_are_never_identifiers():
     """RV7-17: `harvest_ids` requires a digit. Without it every capitalised
     word becomes an exact-ID row."""
-    assert harvest_ids("LANDSCAPE SPECIFICATION TENDER DOCUMENT") == []
+    # "LANDSCAPE" alone never matches ID_RE (no separator), so it could not
+    # exercise the digit rule. A hyphenated pure-word token can.
+    assert harvest_ids("SITE-PLAN and LANDSCAPE-DETAIL") == []
     assert harvest_ids("refer to LAI-003") == ["LAI-003"]
 
 
@@ -309,8 +311,105 @@ def test_cli_warns_that_volatile_patterns_are_ignored(tmp_path: Path, capsys):
 def test_the_shape_check_reads_every_evidence_item():
     """RV7-13: inspecting only the first item would let a money answer in the
     second position go unseen, refusing a correct answer."""
-    ev = [_ev("Drawing title block, sheet 3 of 40.", chunk_id=1),
-          _ev("The final claim amount certified is RM50,569.30.", chunk_id=2,
-              filename="claim.pdf")]
-    v = verify(ev, query="what is the final claim amount certified?")
+    # BOTH items must survive the relevance floor, or the one without a figure
+    # is dropped before the shape check runs and the test proves nothing.
+    ev = [_ev("The claim amount certified was recorded in the interim "
+              "certificate register.", chunk_id=1),
+          _ev("The claim amount certified is RM50,569.30 in certificate 11.",
+              chunk_id=2, filename="claim.pdf")]
+    v = verify(ev, query="what is the claim amount certified?")
     assert v.status != "INSUFFICIENT", (v.status, v.flags)
+
+
+# ------------------------------------------------------------------ F5-5b/c
+# These isolate the EVIDENCE trigger from the query trigger. The round-6 tests
+# used questions containing "date"/"period", which SENSITIVE_INTENT matches on
+# its own — so removing DATE_RE or QUANTITY_RE from _sensitive_evidence changed
+# nothing and the matrix reported both unguarded. The queries here contain no
+# sensitive vocabulary at all, so only the evidence can trigger escalation.
+def _unattributed(text, cid):
+    return {"chunk_id": cid, "text": text, "filename": f"scan_{cid}.pdf",
+            "project": "UNKNOWN", "revision": "R01", "superseded_by": None,
+            "sources": ["dense"]}
+
+
+def test_a_date_in_the_evidence_escalates_without_a_sensitive_question():
+    from alirag.verify import SENSITIVE_INTENT
+    q = "which turf species was laid in the boulevard planting?"
+    assert not SENSITIVE_INTENT.search(q), "query must not trigger on its own"
+    ev = [_unattributed("Zoysia matrella turf was laid in the boulevard "
+                        "planting on 12/08/2026.", 1),
+          _unattributed("Cow grass turf was laid in the boulevard planting "
+                        "on 03/09/2026.", 2)]
+    assert verify(ev, query=q).status == "AMBIGUOUS_PROJECT"
+
+
+def test_a_quantity_in_the_evidence_escalates_without_a_sensitive_question():
+    from alirag.verify import SENSITIVE_INTENT
+    q = "which turf species was laid in the boulevard planting?"
+    assert not SENSITIVE_INTENT.search(q)
+    ev = [_unattributed("Zoysia matrella turf was laid across 1200 sqm of "
+                        "boulevard planting.", 1),
+          _unattributed("Cow grass turf was laid across 800 sqm of boulevard "
+                        "planting.", 2)]
+    assert verify(ev, query=q).status == "AMBIGUOUS_PROJECT"
+
+
+# ------------------------------------------------------------------ R7-6b
+def test_a_document_renamed_inside_an_excluded_dir_still_fails(tmp_path: Path):
+    """R7-6 excuses log ROTATION inside an excluded directory. It must not
+    excuse a document being renamed there — the rotation test alone left that
+    unguarded, because its document lived outside the excluded tree."""
+    src = tmp_path / "src"
+    (src / "models").mkdir(parents=True)
+    doc = src / "models" / "Site Model.skp"
+    doc.write_text("geometry", encoding="utf-8")
+    guard = SafetyGuard([str(src)], str(tmp_path / "ws"),
+                        excluded_dirs=("models",))
+    snap = tmp_path / "ws" / "snap.jsonl"
+    guard.snapshot(snap)
+    doc.rename(src / "models" / "Site Model OLD.skp")
+    res = guard.verify_snapshot(snap)
+    assert res["pass"] is False, (res["verdict"], res["excluded_dir_moved"])
+    assert res["moved"], res
+
+
+# ------------------------------------------------------------------ R7-8b
+def test_retrieval_refuses_non_identifier_tokens_against_a_legacy_index(tmp_path: Path):
+    """R7-8 stops bare numbers being INDEXED. R7-8b is the other half: an index
+    built before that fix is already on disk, so the query side must refuse
+    non-identifier tokens too. Simulated by inserting the legacy row directly."""
+    idx = SparseIndex(tmp_path / "s.sqlite")
+    idx.index_chunks([{"chunk_id": 1, "file_id": 1,
+                       "text": "Minutes dated 2024-03-12 regarding turf.",
+                       "filename": "MOM.pdf", "project": "D"}])
+    # a row an older build would have written
+    idx.con.execute("INSERT INTO ids(norm, raw, chunk_id, file_id, in_filename) "
+                    "VALUES('20240312','2024-03-12',1,1,0)")
+    idx.con.commit()
+    assert idx.search_ids("what was decided on 2024-03-12?", k=10) == []
+    idx.close()
+
+
+# ------------------------------------------------------------------ RV7-18
+def test_exact_id_lookup_applies_a_sql_row_limit(tmp_path: Path):
+    """RV7-18: the k*8 LIMIT bounds work at query time on a corpus where one
+    code appears in tens of thousands of chunks. The result list is truncated
+    to k regardless, so only the SQL itself shows whether the cap is applied."""
+    idx = SparseIndex(tmp_path / "s.sqlite")
+    idx.index_chunks([{"chunk_id": 1, "file_id": 1, "text": "Refer to LAI-003.",
+                       "filename": "n.pdf", "project": "D"}])
+    seen = []
+    real = idx.con.execute
+
+    class Rec:
+        def execute(self, sql, *a):
+            seen.append((sql, a))
+            return real(sql, *a)
+
+    idx.con = Rec()
+    idx.search_ids("find LAI-003", k=3)
+    limits = [a[0][-1] for sql, a in seen if "FROM ids" in sql and a]
+    assert limits and all(0 < lim <= 3 * 8 for lim in limits), limits
+    idx.con = real.__self__
+    idx.close()
