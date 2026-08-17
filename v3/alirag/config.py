@@ -84,9 +84,13 @@ class LLMConfig:
     model: str = "UNVERIFIED-set-after-phase0-inspection"
     api_key: str = ""                    # local servers usually ignore this; never commit real keys
     timeout_s: float = 300.0
-    max_answer_tokens_fast: int = 400
-    max_answer_tokens_deep: int = 1200
-    max_answer_tokens_fullswing: int = 3000
+    # Budgets must cover chain-of-thought AND the answer. Measured on Qwen3.5:
+    # a 400-token FAST budget was consumed entirely by reasoning, so the model
+    # streamed 22s and produced an empty answer (F-V3-09). If your backend can
+    # genuinely disable thinking, these can come back down.
+    max_answer_tokens_fast: int = 1024
+    max_answer_tokens_deep: int = 3000
+    max_answer_tokens_fullswing: int = 8000
     # one of: "none" (no reasoning knob), "openai_effort" (reasoning_effort),
     # "qwen_enable_thinking" (chat_template_kwargs.enable_thinking),
     # "ollama_think" (think: bool)

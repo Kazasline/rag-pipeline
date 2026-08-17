@@ -85,6 +85,22 @@ Candidate fixes to measure next, cheapest first:
    local llama.cpp build — it fits in 16.3 GB VRAM where the 18 GB Ollama
    build does not, so it can stay resident instead of reloading.
 
+### Second run (2026-08-17, after scoping to the real corpus)
+
+Ingest of 300 real project files: **83 ok, 0 failed**, 33.4 s — versus 328 s
+and 56 failures when the pilot was pointed at build output.
+
+Retrieval on the real corpus answered `cepat: cari LANDSCAPE SUBMISSION SUNGAI
+DUA` with three correct PDFs, each cited to a page (`Selgate 01.pdf` p.1,
+`Fee Proposal.pdf` p.1, `Senarai Semak Sijil Siap Kerja Landskap.pdf` p.2),
+all correctly attributed to project SITE CONCEPT INTERNATIONAL, with sparse
+and dense legs agreeing. Retrieval stages held: sparse 1.1 ms, fusion 0.3 ms,
+dense 429 ms.
+
+Generation, however, returned **empty** after 22.5 s (F-V3-09) — the token
+budget went entirely to chain-of-thought. That is fixed but **not yet
+re-measured**, so no TTFT improvement is claimed here.
+
 ### Not measured yet
 
 Recall@K, MRR, citation accuracy and wrong-project rate — all require the

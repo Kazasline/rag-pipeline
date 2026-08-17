@@ -198,9 +198,31 @@ class Engine:
                                           for i, h in enumerate(verdict.kept[:3], 1))}
         trace.set("ttft_ms", out["ttft_ms"])
         trace.stage("generation", out["gen_ms"] / 1000,
-                    {"tokens": out["tokens"], "tokens_per_s": out["tokens_per_s"]})
+                    {"tokens": out["tokens"],
+                     "reasoning_tokens": out.get("reasoning_tokens"),
+                     "finish_reason": out.get("finish_reason"),
+                     "tokens_per_s": out["tokens_per_s"]})
+
+        # F-V3-09: an empty generation is a FAILURE, not a supported answer.
+        # Retrieval may have been perfect, but with no text there is nothing
+        # grounded to report — saying so (with the reason) beats handing back
+        # an empty string carrying a 0.93 confidence.
+        if not out["text"]:
+            reason = out.get("empty_reason") or "model returned no content"
+            return {**base,
+                    "evidence_status": "PARTIAL",
+                    "confidence": 0.0,
+                    "answer": (f"Retrieval succeeded but the model produced no answer "
+                               f"({reason}). The evidence found is listed under sources."),
+                    "generation_error": reason,
+                    "ttft_ms": out["ttft_ms"],
+                    "reasoning_tokens": out.get("reasoning_tokens"),
+                    "finish_reason": out.get("finish_reason")}
+
         return {**base, "confidence": _confidence(verdict), "answer": out["text"],
-                "ttft_ms": out["ttft_ms"], "tokens_per_s": out["tokens_per_s"]}
+                "ttft_ms": out["ttft_ms"], "tokens_per_s": out["tokens_per_s"],
+                "reasoning_tokens": out.get("reasoning_tokens"),
+                "finish_reason": out.get("finish_reason")}
 
 
 def _loc(h: dict) -> str:

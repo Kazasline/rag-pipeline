@@ -136,3 +136,35 @@ to manifest rows without re-hashing, and rebuilds revision links. RESULT:
 `test_reinfer_updates_existing_rows_without_rehash`, plus a verified real run:
 45,645 rows examined, 23,199 updated, 369 revision links rebuilt, 1.8 s.
 LESSON: incremental-by-content means rule changes need their own migration path.
+
+**F-V3-09 / 2026-08-17 / LLM client / 22 seconds of generation produced an
+empty answer reported as SUPPORTED** — SYMPTOM: `cepat: cari LANDSCAPE
+SUBMISSION SUNGAI DUA` retrieved three correct PDFs with page numbers, then
+returned `"answer": ""` with `ttft_ms: 0`, `generation: 22,482 ms`,
+`evidence_status: SUPPORTED` and `confidence: 0.93`. ROOT CAUSE: Qwen3.x is a
+reasoning model and streams chain-of-thought in a separate delta field
+(`reasoning_content`/`reasoning`/`thinking`), emitting `content` only
+afterwards. The client counted `content` alone, so a model that spent its
+entire 400-token FAST budget thinking was indistinguishable from one that
+answered nothing — and the answer layer passed the empty string through with
+retrieval's confidence attached, violating §39/§79. FIX: count reasoning
+deltas separately, capture `finish_reason`, and derive an `empty_reason`
+explaining the failure; the answer layer now returns PARTIAL with confidence
+0.0, the diagnostic, and the retrieved sources instead of an empty string.
+Token budgets raised (FAST 400→1024, DEEP 1200→3000, FULLSWING 3000→8000) so
+the budget covers thinking plus the answer. RESULT:
+`test_empty_answer_is_reported_not_presented_as_supported`,
+`test_reasoning_deltas_counted_separately`.
+LESSON: silence from a model is a result to explain, not an answer to forward.
+Also: retrieval succeeding is not the system succeeding.
+
+**F-V3-10 / 2026-08-17 / exclusions / every ingest failure was build output** —
+SYMPTOM: all 56 FAILED files were `.png` under
+`E:\AI\llama.cpp-src\build\tools\ui\dist\_gzip\` — gzip-compressed PWA
+icons that PIL cannot identify. ROOT CAUSE: build/dist directories were not
+excluded, so web-app assets were queued as knowledge images. FIX: added
+`llama.cpp`, `llama.cpp-src`, `dist`, `build` and `_gzip` to `exclude_dirs`
+(§64: infrastructure is not corpus). RESULT: those files are inventoried and
+skipped rather than attempted; a re-run should report 0 failures.
+LESSON: read the failure list — a uniform failure signature usually means the
+wrong files were queued, not that the parser is broken.

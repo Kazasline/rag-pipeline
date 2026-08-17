@@ -170,3 +170,44 @@ def test_ingest_can_be_scoped_by_path(cfg, corpus):
         "SELECT original_path FROM files WHERE index_status='INDEXED'")]
     assert indexed and all("Meridian" in p for p in indexed), indexed
     ing.close()
+
+
+# ---------------------------------------------------------------- F-V3-09
+def test_empty_answer_is_reported_not_presented_as_supported(cfg, corpus, monkeypatch):
+    """A model that streams only reasoning and no content must NOT yield an
+    empty answer carrying a high confidence."""
+    from alirag.answer import Engine
+    from alirag.ingest import Ingestor
+    from alirag.inventory import scan
+    from alirag.manifest import Manifest
+    from alirag.safety import SafetyGuard
+
+    guard = SafetyGuard(cfg.source_roots, cfg.workspace)
+    mf = Manifest(cfg.manifest_db)
+    scan(cfg, guard, mf, progress_every=0)
+    ing = Ingestor(cfg, mf=mf)
+    ing.run()
+    ing.close()
+
+    eng = Engine(cfg)
+    monkeypatch.setattr(eng.llm, "chat", lambda *a, **k: {
+        "text": "", "ttft_ms": 0, "gen_ms": 22482.0, "tokens": 0,
+        "reasoning_tokens": 400, "finish_reason": "length",
+        "empty_reason": "model produced 400 reasoning tokens and hit the token limit",
+        "tokens_per_s": None})
+    resp = eng.query("find LAI-003", use_cache=False)
+
+    assert resp["answer"], "must not return an empty answer string"
+    assert resp["confidence"] == 0.0, "an empty generation cannot be high-confidence"
+    assert resp["evidence_status"] != "SUPPORTED"
+    assert "reasoning tokens" in resp["generation_error"]
+    assert resp["sources"], "retrieved evidence must still be reported"
+    eng.close()
+
+
+def test_reasoning_deltas_counted_separately():
+    """Thinking tokens must be tracked apart from answer content."""
+    from alirag.llm import _empty_reason
+    assert _empty_reason("", 400, "length") is not None
+    assert "raise max_answer_tokens" in _empty_reason("", 400, "length")
+    assert _empty_reason("real answer", 400, "stop") is None
