@@ -12,6 +12,13 @@ RULE: **one mutation, one mechanism.** A mutation that disables more than one
 thing reports a single result about several, which is how the DATE_RE half of
 F5-5 went untested behind a RED for the money half.
 
+**The reviewer's green rate belongs next to this number.** Round 6: 6 of the
+reviewer's 15 independently-written mutations survived this suite. Round 7: 8
+of 25. The rate is not falling. A matrix authored by the builder establishes
+that the builder's imagination was exhausted — nothing more — so quoting
+"N of N caught" on its own overstates it, and the round-7 reviewer said so
+explicitly.
+
 This file exists because three consecutive audits found the builder's claim of
 a complete revert matrix untrue. Re-run the script rather than trusting this
 table; if they disagree, the script is right. And note what the exit code

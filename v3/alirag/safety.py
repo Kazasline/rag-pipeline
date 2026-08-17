@@ -82,13 +82,24 @@ class VolatilePatternRejected(ValueError):
     """A declared volatile pattern was broad enough to excuse a real document."""
 
 
-# Extensions that carry the user's actual work. A volatile declaration that can
-# match one of these is not describing a live service — it is describing the
-# corpus, and it would let §84 pass while a tender was rewritten.
-_DOCUMENT_EXTS = (
-    ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".txt", ".md",
-    ".csv", ".rtf", ".odt", ".eml", ".msg", ".dwg", ".dxf", ".jpg", ".jpeg",
-    ".png", ".tif", ".tiff",
+# INVERTED: a short, explicit list of things that are NOT the user's work.
+#
+# Round-7 reviewer R7-3. The previous version was an allowlist of 21 document
+# extensions, and the excluded-directory escape hatch was gated on it — so an
+# extension NOT on the list passed. The shipped exclusions are `models`,
+# `checkpoints`, `build`, `dist`; a landscape/construction `Models\` folder
+# holds `.skp`, `.rvt`, `.3dm`, `.ifc`, `.dwf`, and a `Build\` folder holds
+# `.xlsm`. None were listed. Every 3D model in a project could be destroyed
+# and §84 reported `pass: True` with DATA_SAFETY PASS.
+#
+# §1 says FILES, not "files with a recognised extension". So the default is
+# now FAIL: only these — service state that a live process rewrites by design —
+# may be excused, and anything unrecognised is treated as the user's work.
+# Getting this list wrong now costs a false alarm instead of a silent loss.
+_VOLATILE_EXTS = (
+    ".log", ".log1", ".log2", ".tmp", ".temp", ".lock", ".lck", ".pid",
+    ".journal", ".heartbeat", ".swp", ".swo", ".pyc", ".pyo", ".part",
+    ".crdownload", ".db-wal", ".db-shm", ".sock", ".trace", ".out.tmp",
 )
 
 
@@ -224,10 +235,16 @@ class SafetyGuard:
         return out
 
     # ------------------------------------------------------------ §84 acceptance
-    def _is_excluded_dir(self, path: Path) -> bool:
-        """Is this directory one the operator declared non-knowledge?"""
+    def _is_excluded_dir(self, path: Path, is_file: bool = False) -> bool:
+        """Is this path inside a directory the operator declared non-knowledge?
+
+        Round-7 reviewer R7-5: this iterated `path.parts` on FILE paths too, so
+        a file literally named `build` in an ordinary project folder was
+        treated as living inside an excluded directory.
+        """
         low = {d.lower() for d in self.excluded_dirs}
-        return any(part.lower() in low for part in path.parts)
+        parts = path.parent.parts if is_file else path.parts
+        return any(part.lower() in low for part in parts)
 
     def _walk_sources(self):
         for root in self.source_roots:
@@ -358,7 +375,7 @@ class SafetyGuard:
             for p in paths:
                 if p in ours:
                     rag.append(p)
-                elif self._is_excluded_dir(Path(p)):
+                elif self._is_excluded_dir(Path(p), is_file=True):
                     excluded.append(p)
                 else:
                     unexplained.append(p)
@@ -367,24 +384,38 @@ class SafetyGuard:
         rag_mod, excl_mod, unexplained_mod = classify(modified)
         rag_del, excl_del, unexplained_del = classify(still_deleted)
 
-        # An excluded directory holding DOCUMENTS is a configuration error, not
-        # a live service: the exclusion list and the corpus overlap, and the
-        # operator is losing both indexing and safety coverage without being
-        # told. These fail (round-6 reviewer, condition 2).
+        # `moved` was the one category classify() never saw (round-7 R7-6), so
+        # ordinary log rotation inside a live-service directory —
+        # heartbeat.log -> heartbeat.log.1, the exact case exclusions exist for
+        # — produced FAIL on every run. A gate that cannot go green on the
+        # shipped config is one the operator learns to ignore.
+        excl_moved, real_moved = [], []
+        for m in moved:
+            src_excluded = self._is_excluded_dir(Path(m["from"]), is_file=True)
+            dst_excluded = self._is_excluded_dir(Path(m["to"]), is_file=True)
+            vol = (Path(m["from"]).suffix.lower() in _VOLATILE_EXTS
+                   and Path(m["to"]).suffix.lower() in _VOLATILE_EXTS)
+            (excl_moved if (src_excluded and dst_excluded and vol)
+             else real_moved).append(m)
+
+        # An excluded directory holding anything that is NOT recognised
+        # service state is a configuration error, not a live service: the
+        # exclusion list and the corpus overlap, and the operator is losing
+        # both indexing and safety coverage without being told. These fail.
         def _documents(paths):
             return [p for p in paths
-                    if Path(p).suffix.lower() in _DOCUMENT_EXTS]
+                    if Path(p).suffix.lower() not in _VOLATILE_EXTS]
 
         excl_doc_mod = _documents(excl_mod)
         excl_doc_del = _documents(excl_del)
 
         passed = not (rag_mod or unexplained_mod or rag_del
-                      or unexplained_del or moved
+                      or unexplained_del or real_moved
                       or excl_doc_mod or excl_doc_del)
         # A pass earned by an allowlist is not a clean run, and the machine-
         # readable verdict must say so rather than leaving it to a detail
         # string nobody parses (round-3 reviewer R3-7).
-        excluded_changed = bool(excl_mod or excl_del)
+        excluded_changed = bool(excl_mod or excl_del or excl_moved)
         verdict = ("FAIL" if not passed else
                    "PASS_WITH_EXCLUSIONS" if excluded_changed else
                    "PASS")
@@ -410,7 +441,8 @@ class SafetyGuard:
             "excluded_dir_documents_modified": excl_doc_mod,
             "excluded_dir_documents_deleted": excl_doc_del,
             "excluded_dirs": list(self.excluded_dirs),
-            "moved": moved,
+            "moved": real_moved,
+            "excluded_dir_moved": excl_moved,
             # raw diffs
             "modified": modified,
             "deleted": still_deleted,

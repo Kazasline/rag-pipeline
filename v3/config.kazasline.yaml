@@ -126,20 +126,20 @@ ingest:
     - build
     - _gzip
 
-# Paths whose changes the OPERATOR declares expected (§84).
+# volatile_patterns is REMOVED (round-6 R6-1 / round-7 R7-10).
 #
-# These are live services on E:\ that rewrite their own state continuously —
-# NOT document folders. Excluding them from indexing is not enough: the safety
-# walk covers every source file, so without these declarations `safety verify`
-# reports pass:false for heartbeats nobody touched, and a gate that can never
-# legitimately go green is a gate the operator learns to ignore.
+# It used to be a per-path allowlist of changes §84 would excuse. The
+# independent reviewer broke it three times — it accepted "*", then
+# "*/Dawson/*" naming the corpus, then its own guard turned out to be masked —
+# and once the safety walk covered every file it had no remaining purpose
+# except as a bypass. It is gone; the CLI warns if a config still sets it.
 #
-# Every entry is an excuse the §84 verdict will accept, and every excused
-# change is listed under allowlisted_* in the report for the reviewer to rule
-# on. Never point one at a folder containing project documents.
-volatile_patterns:
-  - "*/hermes/*"
-  - "*/sci_ai_library/*"
+# The single mechanism now is `ingest.exclude_dirs` above. A directory listed
+# there is excluded from indexing AND its changes are reported under
+# excluded_dir_* in the safety report without failing the verdict — EXCEPT for
+# files whose extension is not recognised service state (.log/.tmp/.lock/…),
+# which fail, because an exclusion overlapping real work is a configuration
+# error and §1 protects files, not file types.
 
 api:
   host: 127.0.0.1

@@ -888,3 +888,75 @@ different ways — and it is now the fourth distinct instance this round, which
 suggests it is not a slip but a habit worth naming: **when asserting that a
 guard rejects something, make the input valid in every respect except the one
 under test.**
+
+
+**F-V3-51 / grounding / my test fixtures were not examples of the class they
+named** — SYMPTOM: R6-2 was supposed to stop a drawing title block answering a
+money question. The round-7 reviewer reproduced it end-to-end anyway: SUPPORTED,
+unflagged, citing "DAWSON PODIUM LANDSCAPE GENERAL ARRANGEMENT / SHEET 3 OF 40
+SCALE 1:200 DATE 12/03/2024 / DRAWN AZMI CHECKED LIM APPROVED TAN REV R03".
+ROOT CAUSE: two errors compounding. (a) The shape check asked "does any item
+contain money OR a date OR a quantity?" — and every drawing title block carries
+a date. (b) My two test fixtures had NO DATE IN THEM, so the test passed on
+strings that are not what a title block looks like. The mutation went red
+against those strings and said nothing about the class. FIX: the shape asked
+for must be the shape found — money questions need money, date questions need a
+date or a milestone, quantity questions need a quantity — decided by ONE intent
+in priority order, because "when does the defects liability PERIOD start?" hits
+both the date and quantity patterns and was being refused by the wrong check.
+Milestones count as dates, since construction contracts express most dates that
+way. RESULT: `test_a_dated_title_block_does_not_answer_a_money_question`,
+`test_the_shape_asked_for_is_the_shape_required`,
+`test_a_milestone_answers_a_date_question`.
+LESSON: F-V3-48 and F-V3-50 were about test INPUTS being invalid for a second
+reason. This is the mirror image: an input that is valid but unrepresentative.
+A fixture named TITLE_BLOCK that contains no date is not a title block, and a
+test is only as good as its claim that the input belongs to the class.
+
+**F-V3-52 / §84 / an allowlist of documents means an allowlist of everything
+else** — SYMPTOM: `.skp`, `.rvt`, `.3dm`, `.ifc` and `.xlsm` files could be
+modified or deleted inside an excluded directory with §84 reporting
+`pass: True` and DATA_SAFETY PASS. The shipped exclusions are `models`,
+`checkpoints`, `build`, `dist` — and in this domain a `Models\` folder holds
+exactly those extensions. ROOT CAUSE: the escape hatch was gated on
+`_DOCUMENT_EXTS`, a 21-entry ALLOWLIST, so anything unlisted was excused by
+default. The comment introducing the check names this exact risk and then
+defends against it with a list that omits the contents of a Models folder.
+FIX: inverted. `_VOLATILE_EXTS` is a short list of recognised service state
+(.log/.tmp/.lock/.pid/…) and everything else fails. Getting the list wrong now
+costs a false alarm instead of a silent loss. RESULT:
+`test_unrecognised_files_in_an_excluded_dir_are_not_excused` (9 extensions),
+`test_recognised_service_state_in_an_excluded_dir_is_still_excused`.
+LESSON: §1 says FILES. Any guard that enumerates what to PROTECT is wrong by
+construction on a drive whose contents you do not control — enumerate what may
+be excused instead, and let the unknown fail.
+
+**F-V3-53 / retrieval / I fixed the half that cannot help** — SYMPTOM: R6-3b's
+own docstring describes pasting a full sheet number from an email and missing
+the short filename on disk. It still failed: `search_ids` had no expansion, so
+"what does DWG-L-201-R03 show?" never returned `L-201.pdf`. My test asserted on
+`_query_doc_codes` and `_names_the_document` — the verifier's helpers — and
+never touched retrieval. The verifier cannot rescue a document retrieval never
+returned. Separately (R7-8) `code_variants` added the whole harvested token
+unconditionally BEFORE the letter+digit rule, so "minutes dated 2024-03-12"
+indexed `20240312`: every date in every document body became an exact-ID row at
+RRF weight 2.0, the heaviest in the system. `is_document_code()` already
+rejected both and was simply never applied at index time or in `search_ids`.
+RESULT: `test_retrieval_finds_the_short_filename_from_a_full_sheet_number`,
+`test_dates_and_bare_numbers_are_not_exact_ids`,
+`test_unseparated_codes_are_still_indexed`.
+LESSON: when a defect spans producer and consumer, fixing the consumer and
+testing the consumer's helper proves the fix works on the side that was never
+broken.
+
+**F-V3-54 / test coverage / the reviewer's green rate is not falling** —
+round 6: 6 of the reviewer's 15 mutations survived. Round 7: 8 of 25. Mine:
+53 of 53 caught, both times. The eight this round were: our own writes excused
+inside an excluded dir, the workspace-skip, the refused-write attribution, the
+CLI warning, the shape check reading only the first item, unseparated-code
+indexing, the digit requirement in `harvest_ids`, and the exact-ID row cap.
+All now have tests and matrix rows.
+LESSON: recorded as a standing caveat rather than a fixed defect. A matrix
+authored by the builder can only establish that the builder's imagination was
+exhausted. The headline number belongs next to the reviewer's green rate, not
+on its own — REVERT_MATRIX.md now says so.

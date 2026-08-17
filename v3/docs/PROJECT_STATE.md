@@ -6,15 +6,15 @@ fix pass that followed it._
 ## Where we are
 
 ```
-✅ PHASE 0-15   code built + 228 tests green
+✅ PHASE 0-15   code built + 276 tests green
 ✅ PHASE 0      EXECUTED on the target machine (2026-08-17)
 ✅ PHASE 1      EXECUTED — 20,000-file pilot inventory of E:\
 ✅ PHASE 5-15   installed; 313 files ingested, first grounded answers returned
 ⬜ PHASE 16     benchmark (needs a human-reviewed question set)
-🔄 PHASE 17-19  independent reviewer has run SIX times and FAILED each time
+🔄 PHASE 17-19  independent reviewer has run SEVEN times and FAILED each time
                 (round 1: 3/6; round 2: 4/6; round 3: 2/6; round 4: 4/6;
-                round 5: 5/6; round 6: 4/6). Round-6 fixes are in. Round 7
-                pending — the reviewer, not the builder, decides.
+                round 5: 5/6; round 6: 4/6; round 7: 3/6). Round-7 fixes are
+                in. Round 8 pending — the reviewer, not the builder, decides.
 
                 Round 6 ruled that NO category can be signed off without
                 on-machine evidence, and that the honest ceiling short of it is
@@ -30,8 +30,8 @@ fix pass that followed it._
 ⬜ PHASE 20     final docs with real numbers
 ```
 
-**Nothing here is signed off.** The builder cannot self-certify (§51). Four
-audits, four FAILs.
+**Nothing here is signed off.** The builder cannot self-certify (§51). Seven
+audits, seven FAILs.
 
 Round 4 regressed three categories, and the reason is worth stating plainly:
 two of the round-3 "fixes" were written to the two literal examples the

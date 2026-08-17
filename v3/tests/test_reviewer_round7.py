@@ -1,0 +1,316 @@
+r"""Regression tests for the round-7 reviewer's findings, plus the eight
+mechanisms its own mutations found unguarded.
+
+Round 6: 6 of the reviewer's 15 mutations came back green. Round 7: 8 of 25.
+The rate is not falling, which is the argument the reviewer makes and I accept:
+a matrix authored by the builder establishes that the builder's imagination was
+exhausted, not that the code is covered.
+"""
+
+import json
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from alirag import reviewer
+from alirag.config import Config, EmbedConfig
+from alirag.safety import SafetyGuard, hash_path
+from alirag.sparse import SparseIndex, code_variants, harvest_ids
+from alirag.verify import verify
+
+# A REAL drawing title block. The round-6 fixtures had no date in them, so the
+# test passed on inputs that are not what the class looks like (R7-1).
+TITLE_BLOCK = ("DAWSON PODIUM LANDSCAPE GENERAL ARRANGEMENT / SHEET 3 OF 40 "
+               "SCALE 1:200 DATE 12/03/2024 / DRAWN AZMI CHECKED LIM "
+               "APPROVED TAN REV R03")
+
+
+def _ev(text, **over):
+    e = {"chunk_id": 1, "text": text, "filename": "DWG-L-201-R03 Podium GA.pdf",
+         "project": "Dawson", "revision": "R03", "superseded_by": None,
+         "sources": ["dense"]}
+    e.update(over)
+    return e
+
+
+# ------------------------------------------------------------------ R7-1
+def test_a_dated_title_block_does_not_answer_a_money_question():
+    """R7-1: every drawing title block carries a date, and the shape check
+    accepted money OR date OR quantity — so a title block satisfied 'what is
+    the final claim amount?', end-to-end and unflagged."""
+    v = verify([_ev(TITLE_BLOCK)],
+               query="what is the final claim amount for the Dawson podium landscape?",
+               known_projects=["Dawson"])
+    assert v.status == "INSUFFICIENT", (v.status, v.flags)
+    assert any("monetary amount" in f for f in v.flags), v.flags
+
+
+# ------------------------------------------------------------------ R7-2
+def test_the_shape_asked_for_is_the_shape_required():
+    """R7-2: the check did not distinguish WHICH shape it matched, so a date
+    question was satisfied by a figure and a money question by an area."""
+    money_only = _ev("The interim payment released was RM12,500.00 for the podium.")
+    assert verify([money_only],
+                  query="when is the completion date for the podium?").status \
+        == "INSUFFICIENT"
+    area_only = _ev("The podium landscape covers 1200 sqm of soft landscape.")
+    assert verify([area_only],
+                  query="what is the total claim amount for the podium?").status \
+        == "INSUFFICIENT"
+    # ...and each is answered by its own shape
+    assert verify([money_only],
+                  query="what payment was released for the podium?").status \
+        == "SUPPORTED"
+
+
+# ------------------------------------------------------------------ R7-9
+def test_a_milestone_answers_a_date_question():
+    """R7-9: construction contracts express most dates as milestones. The
+    narrowing was supposed to stop refusing legitimate word-answers and did
+    not, because 'period' pulled the question into the quantity check."""
+    ev = _ev("The defects liability period for the podium landscape starts "
+             "upon issuance of the Certificate of Practical Completion.")
+    v = verify([ev], query="when does the defects liability period for the "
+                           "podium landscape start?")
+    assert v.status == "SUPPORTED", (v.status, v.flags)
+
+
+# ------------------------------------------------------------------ R7-3
+@pytest.mark.parametrize("ext", [".skp", ".rvt", ".3dm", ".ifc", ".dwf",
+                                 ".xlsm", ".docm", ".zip", ".weirdext"])
+def test_unrecognised_files_in_an_excluded_dir_are_not_excused(tmp_path: Path,
+                                                               ext: str):
+    """R7-3: the escape hatch was gated on a 21-entry ALLOWLIST of document
+    extensions, and the shipped exclusions name `models` and `build` — folders
+    that in this domain hold .skp/.rvt/.xlsm. Every 3D model in a project could
+    be destroyed with §84 reporting pass:True. §1 says FILES, not files with a
+    recognised extension, so the default is now FAIL."""
+    src = tmp_path / "src"
+    (src / "Dawson" / "Models").mkdir(parents=True)
+    f = src / "Dawson" / "Models" / ("site_model" + ext)
+    f.write_text("original", encoding="utf-8")
+    guard = SafetyGuard([str(src)], str(tmp_path / "ws"),
+                        excluded_dirs=("models",))
+    snap = tmp_path / "ws" / "snap.jsonl"
+    guard.snapshot(snap)
+    f.write_text("destroyed", encoding="utf-8")
+    res = guard.verify_snapshot(snap)
+    assert res["pass"] is False, (ext, res["verdict"])
+    assert any(ext in p for p in res["excluded_dir_documents_modified"])
+
+
+def test_recognised_service_state_in_an_excluded_dir_is_still_excused(tmp_path: Path):
+    """The inversion must not make the gate unsatisfiable again."""
+    src = tmp_path / "src"
+    (src / "hermes").mkdir(parents=True)
+    log = src / "hermes" / "beat.log"
+    log.write_text("tick", encoding="utf-8")
+    guard = SafetyGuard([str(src)], str(tmp_path / "ws"),
+                        excluded_dirs=("hermes",))
+    snap = tmp_path / "ws" / "snap.jsonl"
+    guard.snapshot(snap)
+    log.write_text("tick tock", encoding="utf-8")
+    res = guard.verify_snapshot(snap)
+    assert res["pass"] is True and res["verdict"] == "PASS_WITH_EXCLUSIONS"
+
+
+# ------------------------------------------------------------------ R7-4 / RV7-2
+def test_a_change_we_made_inside_an_excluded_dir_is_still_ours(tmp_path: Path):
+    """RV7-2 (unguarded): swapping the classify() precedence made a
+    RAG-attributable change inside an excluded directory report as
+    `excluded_dir_modified` and pass §84."""
+    src = tmp_path / "src"
+    (src / "hermes").mkdir(parents=True)
+    f = src / "hermes" / "state.log"
+    f.write_text("a", encoding="utf-8")
+    guard = SafetyGuard([str(src)], str(tmp_path / "ws"),
+                        excluded_dirs=("hermes",))
+    snap = tmp_path / "ws" / "snap.jsonl"
+    guard.snapshot(snap)
+    # journal it as OUR write, then change it
+    guard._audit("write", str(f), "test")
+    f.write_text("b", encoding="utf-8")
+    res = guard.verify_snapshot(snap)
+    assert str(f) in res["rag_modified"], res
+    assert res["pass"] is False, "a change we made to a source file is a breach"
+
+
+# ------------------------------------------------------------------ R7-5
+def test_a_file_named_like_an_excluded_dir_is_not_excused(tmp_path: Path):
+    """R7-5: `_is_excluded_dir` iterated the parts of a FILE path, so a file
+    literally named `build` in an ordinary project folder was treated as living
+    inside an excluded directory."""
+    src = tmp_path / "src"
+    (src / "Dawson").mkdir(parents=True)
+    f = src / "Dawson" / "build"
+    f.write_text("real content", encoding="utf-8")
+    guard = SafetyGuard([str(src)], str(tmp_path / "ws"),
+                        excluded_dirs=("build",))
+    snap = tmp_path / "ws" / "snap.jsonl"
+    guard.snapshot(snap)
+    f.write_text("clobbered", encoding="utf-8")
+    res = guard.verify_snapshot(snap)
+    assert res["pass"] is False, res["verdict"]
+    assert str(f) in res["unexplained_modified"]
+
+
+# ------------------------------------------------------------------ R7-6
+def test_log_rotation_inside_an_excluded_dir_does_not_fail(tmp_path: Path):
+    """R7-6: `moved` was the one category classify() never saw, so ordinary log
+    rotation — heartbeat.log -> heartbeat.log.1, the exact case exclusions
+    exist for — produced FAIL on every run against the shipped config."""
+    src = tmp_path / "src"
+    (src / "hermes").mkdir(parents=True)
+    log = src / "hermes" / "heartbeat.log"
+    log.write_text("tick", encoding="utf-8")
+    guard = SafetyGuard([str(src)], str(tmp_path / "ws"),
+                        excluded_dirs=("hermes",))
+    snap = tmp_path / "ws" / "snap.jsonl"
+    guard.snapshot(snap)
+    log.rename(src / "hermes" / "heartbeat.log1")
+    res = guard.verify_snapshot(snap)
+    assert res["pass"] is True, (res["verdict"], res["moved"])
+    assert res["excluded_dir_moved"], res
+
+
+def test_a_document_rename_still_fails(tmp_path: Path):
+    """The move classification must not excuse a real rename."""
+    src = tmp_path / "src"
+    (src / "Dawson").mkdir(parents=True)
+    doc = src / "Dawson" / "Tender.pdf"
+    doc.write_text("terms", encoding="utf-8")
+    guard = SafetyGuard([str(src)], str(tmp_path / "ws"),
+                        excluded_dirs=("hermes",))
+    snap = tmp_path / "ws" / "snap.jsonl"
+    guard.snapshot(snap)
+    doc.rename(src / "Dawson" / "Tender_old.pdf")
+    res = guard.verify_snapshot(snap)
+    assert res["pass"] is False and res["moved"]
+
+
+# ------------------------------------------------------------------ R7-7
+def test_retrieval_finds_the_short_filename_from_a_full_sheet_number(tmp_path: Path):
+    """R7-7: R6-3b expanded only the VERIFIER's helper, so retrieval still
+    looked up the greedy whole token — and the verifier cannot rescue a
+    document retrieval never returned."""
+    idx = SparseIndex(tmp_path / "s.sqlite")
+    idx.index_chunks([
+        {"chunk_id": 1, "file_id": 1, "text": "Planting layout.",
+         "filename": "L-201.pdf", "project": "D"},
+        {"chunk_id": 2, "file_id": 2, "text": "Setting out plan.",
+         "filename": "DWG-L-201-R03.pdf", "project": "D"},
+    ])
+    got = {h["chunk_id"] for h in idx.search_ids("what does DWG-L-201-R03 show?", k=10)}
+    assert got == {1, 2}, got
+    idx.close()
+
+
+# ------------------------------------------------------------------ R7-8
+def test_dates_and_bare_numbers_are_not_exact_ids(tmp_path: Path):
+    """R7-8: `normalize_id(raw)` was added unconditionally BEFORE the
+    letter+digit rule, so every date in every document body became an exact-ID
+    row at RRF weight 2.0 across 662k mostly-dated documents."""
+    assert code_variants("minutes dated 2024-03-12") == set()
+    assert code_variants("12-34 grid") == set()
+    idx = SparseIndex(tmp_path / "s.sqlite")
+    idx.index_chunks([
+        {"chunk_id": 1, "file_id": 1,
+         "text": "Minutes of meeting dated 2024-03-12 regarding turf.",
+         "filename": "MOM.pdf", "project": "D"},
+        {"chunk_id": 2, "file_id": 2, "text": "Grid 12-34 shows the pump chamber.",
+         "filename": "Grid.pdf", "project": "D"},
+    ])
+    assert idx.search_ids("what was decided on 2024-03-12?", k=10) == []
+    assert idx.search_ids("what does grid 12-34 show?", k=10) == []
+    idx.close()
+
+
+# ------------------------------------------------------------------ RV7-16
+def test_unseparated_codes_are_still_indexed(tmp_path: Path):
+    """RV7-16: removing the whole-token line would kill codes with no
+    separator — LAI003, NCR12 — which is most of what the §9 path is for."""
+    idx = SparseIndex(tmp_path / "s.sqlite")
+    idx.index_chunks([{"chunk_id": 1, "file_id": 1, "text": "See LAI003 for turf.",
+                       "filename": "note.pdf", "project": "D"}])
+    assert [h["chunk_id"] for h in idx.search_ids("find LAI003", k=5)] == [1]
+    idx.close()
+
+
+# ------------------------------------------------------------------ RV7-17
+def test_pure_words_are_never_identifiers():
+    """RV7-17: `harvest_ids` requires a digit. Without it every capitalised
+    word becomes an exact-ID row."""
+    assert harvest_ids("LANDSCAPE SPECIFICATION TENDER DOCUMENT") == []
+    assert harvest_ids("refer to LAI-003") == ["LAI-003"]
+
+
+# ------------------------------------------------------------------ RV7-18
+def test_exact_id_lookup_is_row_bounded(tmp_path: Path):
+    """RV7-18: the k*8 LIMIT bounds index-time work on a corpus where one code
+    can appear in tens of thousands of chunks (§88)."""
+    idx = SparseIndex(tmp_path / "s.sqlite")
+    idx.index_chunks([{"chunk_id": i, "file_id": i, "text": "Refer to LAI-003.",
+                       "filename": f"n{i}.pdf", "project": "D"}
+                      for i in range(1, 60)])
+    assert len(idx.search_ids("find LAI-003", k=3)) <= 3
+    idx.close()
+
+
+# ------------------------------------------------------------------ RV7-6
+def test_the_walk_never_descends_into_the_workspace(tmp_path: Path):
+    """RV7-6: the workspace can legitimately sit inside a source root
+    (E:\\ALI_RAG on E:\\). Walking it would report our own index writes as
+    source changes on every run."""
+    src = tmp_path / "src"
+    ws = src / "ALI_RAG"
+    ws.mkdir(parents=True)
+    (src / "doc.txt").write_text("real", encoding="utf-8")
+    (ws / "index.sqlite").write_text("ours", encoding="utf-8")
+    guard = SafetyGuard([str(src)], str(ws))
+    walked = {str(p) for p in guard._walk_sources()}
+    assert str(src / "doc.txt") in walked
+    assert not any("ALI_RAG" in p for p in walked), walked
+
+
+# ------------------------------------------------------------------ RV7-7
+def test_a_refused_write_is_not_attributed_to_us(tmp_path: Path):
+    """RV7-7: `written_paths` matched on a suffix once, so a REFUSED attempt
+    counted as our write and an innocent run could fail."""
+    src = tmp_path / "src"
+    src.mkdir()
+    doc = src / "tender.txt"
+    doc.write_text("terms", encoding="utf-8")
+    guard = SafetyGuard([str(src)], str(tmp_path / "ws"))
+    with pytest.raises(Exception):
+        guard.guarded_write_path(doc, "should be refused")
+    assert str(doc) not in guard.written_paths()
+
+
+# ------------------------------------------------------------------ RV7-8
+def test_cli_warns_that_volatile_patterns_are_ignored(tmp_path: Path, capsys):
+    """RV7-8: a config line the operator believes is protecting them must not
+    be silently discarded."""
+    from alirag.cli import main
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.txt").write_text("x", encoding="utf-8")
+    cfg = Config(workspace=str(tmp_path / "ws"), source_roots=[str(src)],
+                 embed=EmbedConfig(provider="hash", dim=256))
+    cfg.volatile_patterns = ["*/hermes/*"]
+    p = cfg.dir("config") / "config.yaml"
+    cfg.save(p)
+    main(["--config", str(p), "safety", "snapshot"])
+    out = capsys.readouterr().out
+    assert "volatile_patterns is no longer honoured" in out, out
+
+
+# ------------------------------------------------------------------ RV7-13
+def test_the_shape_check_reads_every_evidence_item():
+    """RV7-13: inspecting only the first item would let a money answer in the
+    second position go unseen, refusing a correct answer."""
+    ev = [_ev("Drawing title block, sheet 3 of 40.", chunk_id=1),
+          _ev("The final claim amount certified is RM50,569.30.", chunk_id=2,
+              filename="claim.pdf")]
+    v = verify(ev, query="what is the final claim amount certified?")
+    assert v.status != "INSUFFICIENT", (v.status, v.flags)

@@ -45,6 +45,34 @@ QUANTITY_RE = re.compile(
     r"bulan|minggu|hari|tahun|unit|biji)\b", re.IGNORECASE)
 
 
+def _missing_answer_shape(query: str, items: list) -> str | None:
+    """The shape the question asks for, when no evidence item carries it.
+
+    Returns a description for the flag, or None if the evidence can answer.
+    Each intent is checked against ITS OWN evidence shape: a money question is
+    not satisfied by a date, and a date question is not satisfied by a figure.
+    """
+    if not query:
+        return None
+    text = " ".join(e.get("text", "") or "" for e in items)
+    # ONE intent decides, by priority. A question mentioning several — "when
+    # does the defects liability PERIOD start?" hits both the date and quantity
+    # patterns — must be judged on what it actually asks for, or the stricter
+    # unrelated check refuses a correct answer (round-7 reviewer R7-9).
+    if MONEY_INTENT.search(query):
+        return None if MONEY_RE.search(text) else "a monetary amount"
+    if DATE_INTENT.search(query):
+        # A milestone counts as a date: construction contracts express most
+        # dates that way ("upon issuance of the Certificate of Practical
+        # Completion"), and refusing those refuses correct answers.
+        return None if (DATE_RE.search(text) or MILESTONE_RE.search(text)) \
+            else "a date or a milestone"
+    if QUANTITY_INTENT.search(query):
+        return None if (QUANTITY_RE.search(text) or MONEY_RE.search(text)
+                        or DATE_RE.search(text)) else "a quantity"
+    return None
+
+
 def _sensitive_evidence(items: list) -> bool:
     """Does the EVIDENCE itself carry the kind of fact that must be attributable?
 
@@ -79,6 +107,39 @@ SENSITIVE_INTENT = re.compile(
     r"jumlah|harga|kos|nilai|tuntutan|bayaran|tarikh|tempoh|status|"
     r"berapa|bayar|caj|hutang|lewat|bila)\b",
     re.IGNORECASE)
+
+# The shape a question ASKS FOR, matched against the shape the evidence HAS.
+#
+# Round-7 reviewer R7-1/R7-2: the previous check asked "does any item contain
+# money OR a date OR a quantity?" and every drawing title block contains a
+# date — so a title block satisfied "what is the final claim amount?",
+# end-to-end, unflagged. Symmetrically, evidence containing only RM12,500.00
+# satisfied "when is the completion date?". A shape check that does not
+# distinguish which shape it matched is not a shape check.
+MONEY_INTENT = re.compile(
+    r"\b(amount|amounts|sum|total|cost|costs|price|priced|value|quantum|"
+    r"claim|claims|payment|payments|invoice|invoiced|fee|fees|charge|charged|"
+    r"billed|paid|payable|owed|owing|balance|shortfall|unpaid|retention|"
+    r"berapa|jumlah|harga|kos|nilai|bayaran|tuntutan)\b", re.IGNORECASE)
+
+DATE_INTENT = re.compile(
+    r"\b(when|date|dated|deadline|due|completion|completed|handover|"
+    r"handed over|commence|commenced|start|started|finish|finished|"
+    r"extension|eot|tarikh|bila|siap)\b", re.IGNORECASE)
+
+QUANTITY_INTENT = re.compile(
+    r"\b(how much|how many|how long|quantity|quantities|duration|period|"
+    r"days|weeks|months|years|area|length|width|depth|diameter|girth|"
+    r"tempoh|berapa lama|luas|panjang)\b", re.IGNORECASE)
+
+# A date question can legitimately be answered by a MILESTONE rather than a
+# calendar date — "upon issuance of the Certificate of Practical Completion"
+# is how construction contracts express most dates (round-7 reviewer R7-9).
+MILESTONE_RE = re.compile(
+    r"\b(upon|after|before|within|from the date of|issuance|certificate|"
+    r"practical completion|cpc\b|sectional completion|possession of site|"
+    r"notice to proceed|milestone|selepas|sebelum|setelah)\b", re.IGNORECASE)
+
 
 # Questions whose answer must be a NUMBER OR A DATE. Narrower than
 # SENSITIVE_INTENT on purpose: "what is the approval status?" is sensitive —
@@ -399,11 +460,12 @@ def verify(evidence: list[dict], project_hint: str | None = None,
     # a status, then evidence containing none of those cannot support an
     # answer — whoever the project belongs to. This is the same "key on the
     # material" move as F5-5, applied to the other half.
-    if query and QUANTITATIVE_INTENT.search(query) and not _sensitive_evidence(kept):
+    missing = _missing_answer_shape(query, kept)
+    if missing:
         flags.append(
-            "the question asks for a figure or a date, but no retrieved "
-            "passage contains one — the evidence identifies documents rather "
-            "than answering the question")
+            f"the question asks for {missing}, but no retrieved passage "
+            f"contains one — the evidence identifies documents rather than "
+            f"answering the question")
         return Verdict("INSUFFICIENT", kept, flags, conflicts)
 
     # ---- sufficiency

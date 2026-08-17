@@ -82,7 +82,15 @@ def code_variants(text: str, limit: int = 60) -> set:
     """
     out: set = set()
     for raw in harvest_ids(text, limit=limit):
-        out.add(normalize_id(raw))
+        # Round-7 reviewer R7-8: this added the whole token UNCONDITIONALLY,
+        # before the letter+digit rule below — so "12-34 grid" indexed `1234`
+        # and "minutes dated 2024-03-12" indexed `20240312`. Every date in
+        # every document body became an exact-ID row at RRF weight 2.0, the
+        # heaviest in the system, across 662k mostly-dated documents.
+        # `is_document_code` already rejects both; it was simply never applied
+        # here or in `search_ids`.
+        if is_document_code(raw):
+            out.add(normalize_id(raw))
         parts = [p for p in re.split(r"[-_/.]", raw) if p]
         if len(parts) < 2:
             continue
@@ -280,8 +288,21 @@ class SparseIndex:
         another project outrank everything — an isolation hole (§60).
         """
         hits: dict[int, float] = {}
+        # Expand the query through code_variants, and require the token to look
+        # like a document identifier.
+        #
+        # Round-7 reviewer R7-7: R6-3b expanded only `verify._query_doc_codes`,
+        # so retrieval still looked up the greedy whole token — "what does
+        # DWG-L-201-R03 show?" never returned `L-201.pdf`. The verifier cannot
+        # rescue a document retrieval never returned. R7-8: without the
+        # is_document_code filter, a dated query matched every dated chunk.
+        norms: set = set()
         for raw in harvest_ids(query, limit=8):
-            norm = normalize_id(raw)
+            if not is_document_code(raw):
+                continue
+            norms.add(normalize_id(raw))
+            norms |= code_variants(raw, limit=8)
+        for norm in sorted(norms):
             for cid, in_fn in self.con.execute(
                     "SELECT chunk_id, in_filename FROM ids WHERE norm=? LIMIT ?",
                     (norm, k * 8)):
