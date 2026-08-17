@@ -718,3 +718,32 @@ filename`, `test_named_document_is_answered_via_the_exact_leg_at_scale`
 (asserts `retrievers` contains `exact`, on a 260-document corpus).
 LESSON: fixing the consumer is not fixing the producer. And a test at a scale
 where every path succeeds certifies nothing about which path ran.
+
+
+**F-V3-43 / the revert matrix immediately found two things I had missed** —
+the first full run of `v3/tools/revert_matrix.py` reported 36 fixes guarded and
+two not:
+
+* `F5-4` — the "no excluded directories configured" refusal, which is the only
+  thing protecting the three `SafetyGuard` constructions that do not pass
+  `excluded_dirs=`. Disabling it changed no test, because the pattern check
+  raises from a LATER branch too and my test matched the word "excluded" in
+  either message. The messages are now distinguishable and the test asserts the
+  specific one.
+* `N4-3b` — a per-code `parts[:8]` window bound. Investigating why no test
+  could catch it showed the line was UNREACHABLE: `ID_RE` permits at most six
+  separator repetitions, so a harvested code has at most seven parts and the
+  slice never fires. It was not an unguarded fix but dead code wearing the
+  costume of one. Removed, and replaced with `MAX_CODE_VARIANTS`, a total cap
+  that does real work — every variant becomes a row in the ids table at index
+  time across 662k files — with a test that exercises it.
+
+It also flagged two mutation definitions as STALE because I had edited the
+code after writing them, which is the failure mode a hand-maintained matrix
+has and is exactly why it prints that as a distinct result rather than
+counting it as a pass.
+
+LESSON: the artifact earned its place on its first run. Two rounds of my own
+assertions had already covered this ground and missed both. "I checked" is a
+claim; a script anyone can re-run is evidence — and the difference is not
+diligence, it is that one of them can be wrong without anybody noticing.

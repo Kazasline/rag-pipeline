@@ -78,6 +78,19 @@ def test_exact_id_leg_finds_a_code_inside_a_longer_filename(tmp_path: Path):
     hits = idx.search_ids("find L-201", k=10)
     assert [h["chunk_id"] for h in hits] == [1], hits
     assert [h["chunk_id"] for h in idx.search_ids("L-204", k=10)] == [2]
+
+    # The same expansion must apply to codes mentioned in BODY TEXT, not only
+    # in filenames. Retrieval and certification are different jobs: the
+    # verifier deliberately certifies only on filenames (R3-2), but the exact
+    # leg still has to FIND a chunk that cites "MEP-4501-RevC" when the user
+    # asks about MEP-4501 — otherwise §9 falls back to BM25 for cross
+    # references, which is the case it exists to cover.
+    idx.index_chunks([
+        {"chunk_id": 3, "file_id": 3,
+         "text": "Coordinate with MEP-4501-RevC for the pump chamber.",
+         "filename": "coordination note.pdf", "project": "Dawson"},
+    ])
+    assert [h["chunk_id"] for h in idx.search_ids("MEP-4501", k=10)] == [3]
     idx.close()
 
 
@@ -157,7 +170,10 @@ def test_volatile_declaration_is_refused_when_nothing_is_excluded():
     guard = SafetyGuard(["/tmp/x"], "/tmp/ws")          # no excluded dirs
     with pytest.raises(Exception) as e:
         guard.allow_volatile(["*/hermes/*"])
-    assert "excluded" in str(e.value).lower()
+    # Assert THIS refusal specifically. Both branches of the check raise, and
+    # the revert matrix showed a generic "excluded" substring match passes
+    # either way — so the test could not tell the guard from its fallback.
+    assert str(e.value).startswith("NO_EXCLUDED_DIRS:"), str(e.value)
 
 
 def test_every_guard_construction_passes_excluded_dirs():
@@ -167,6 +183,26 @@ def test_every_guard_construction_passes_excluded_dirs():
         text = (Path("v3/alirag") / f"{mod}.py").read_text(encoding="utf-8")
         for call in _re.findall(r"SafetyGuard\((?:[^()]|\([^()]*\))*\)", text):
             assert "excluded_dirs" in call, f"{mod}.py: {call}"
+
+
+def test_code_variant_expansion_is_bounded():
+    """The revert matrix found this bound unguarded: removing it changed no
+    test. A code with many separator-joined parts expands combinatorially
+    (n(n+1)/2 windows), and this runs per chunk over 662k files at index time.
+    """
+    from alirag.sparse import MAX_CODE_VARIANTS, code_variants
+    # Per code, ID_RE allows at most 7 parts, so windows are bounded at 28.
+    assert len(code_variants("AB-12-CD-34-EF-56-GH")) <= 28
+
+    # In total: every variant becomes a row in the ids table at index time
+    # across 662k files, and a chunk can carry many codes.
+    many = " ".join(f"AB-{i:03d}-CDE-FGH-JKL-MNO{i}" for i in range(120))
+    # The cap is checked between codes, so it can overshoot by at most one
+    # code's worth of windows (28). Unbounded, this input yields >2000.
+    assert len(code_variants(many, limit=200)) <= MAX_CODE_VARIANTS + 28
+
+    # ...and neither bound may break an ordinary code
+    assert "L201" in code_variants("L-201-RevB.pdf")
 
 
 # ------------------------------------------------------------------ F5-5

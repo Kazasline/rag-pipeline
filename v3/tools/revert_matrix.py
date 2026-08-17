@@ -95,10 +95,16 @@ MUTATIONS: list[tuple[str, str, str, str, str]] = [
      "f\"{evidence.get('filename','')} {evidence.get('text','')}\", limit=200))"),
     ("F5-2", "code variants not indexed, so the exact leg misses real filenames",
      "alirag/sparse.py",
-     "            for norm in code_variants(raw):",
-     "            for norm in {normalize_id(raw)}:"),
-    ("N4-3b", "code_variants window bound removed",
-     "alirag/sparse.py", "        parts = parts[:8]", "        parts = parts[:64]"),
+     "            for norm in code_variants(r[\"text\"]):",
+     "            for norm in {normalize_id(x) for x in harvest_ids(r[\"text\"])}:"),
+    ("F5-2b", "filename code variants not indexed",
+     "alirag/sparse.py",
+     "            for norm in code_variants(r[\"filename\"]):",
+     "            for norm in {normalize_id(x) for x in harvest_ids(r[\"filename\"])}:"),
+    ("N4-3b", "total code-variant bound removed (index-time work unbounded)",
+     "alirag/sparse.py",
+     "        if len(out) >= MAX_CODE_VARIANTS:\n            break",
+     "        if False:\n            break"),
 
     # ---------------------------------------------------------- isolation (§60)
     ("F3a", "project filter fails open",
@@ -165,7 +171,13 @@ MUTATIONS: list[tuple[str, str, str, str, str]] = [
      "            \"project_source\": h.get(\"project_source\"),\n", "\n"),
     ("F5-7", "re-inference forges project_source",
      "alirag/inventory.py",
-     "\"project_source\": meta[\"project_source\"]", "\"project_source\": \"content\""),
+     "                \"UPDATE files SET project=?, project_source=?, document_type=?, \"\n"
+     "                \"discipline=?, revision=? WHERE file_id=?\",\n"
+     "                (meta[\"project\"], meta[\"project_source\"], meta[\"document_type\"],",
+     "                \"UPDATE files SET project=?, project_source=project_source, \"\n"
+     "                \"document_type=?, \"\n"
+     "                \"discipline=?, revision=? WHERE file_id=?\",\n"
+     "                (meta[\"project\"], meta[\"document_type\"],"),
     ("PCT", "project_unknown_pct hardcoded",
      "alirag/manifest.py",
      "        s[\"project_unknown_pct\"] = (round(100.0 * unknown / s[\"files_total\"], 1)",

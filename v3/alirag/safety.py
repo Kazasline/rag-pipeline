@@ -124,9 +124,11 @@ def _reject_overbroad_pattern(pat: str, excluded_dirs=()) -> None:
     allowed = {d.lower() for d in excluded_dirs}
     if not allowed:
         raise VolatilePatternRejected(
-            f"volatile pattern {pat!r} cannot be checked: no excluded "
-            "directories are configured, so there is no directory whose "
-            "contents are known not to be documents.")
+            f"NO_EXCLUDED_DIRS: volatile pattern {pat!r} cannot be checked "
+            "because no excluded directories are configured, so there is no "
+            "directory whose contents are known not to be documents. This "
+            "guard is what protects a SafetyGuard built without "
+            "`excluded_dirs=` from accepting an unbounded allowlist.")
     hit = {c.strip("*") for c in components} & allowed
     if not hit:
         raise VolatilePatternRejected(

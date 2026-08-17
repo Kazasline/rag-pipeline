@@ -57,6 +57,14 @@ def normalize_id(tok: str) -> str:
     return re.sub(r"[-_/.]", "", tok).upper()
 
 
+# Hard ceiling on variants returned for one chunk. The per-code window bound
+# (8 parts -> at most 36 windows) bounds each code, but a chunk can contain
+# many codes, and every variant becomes a row in the ids table at index time
+# over 662k files. The revert matrix found the per-code bound unguarded; this
+# is the bound that actually limits the work.
+MAX_CODE_VARIANTS = 400
+
+
 def code_variants(text: str, limit: int = 60) -> set:
     """Normalized codes in *text*, INCLUDING contiguous sub-sequences of
     separator-joined parts.
@@ -78,13 +86,20 @@ def code_variants(text: str, limit: int = 60) -> set:
         parts = [p for p in re.split(r"[-_/.]", raw) if p]
         if len(parts) < 2:
             continue
-        parts = parts[:8]                     # bound the window count
+        # No per-code slice is needed: ID_RE allows at most 6 separator
+        # repetitions, so a harvested code has at most 7 parts and the window
+        # count per code is bounded at 7*8/2 = 28. An earlier `parts[:8]` here
+        # was unreachable — the revert matrix reported it as an unguarded fix,
+        # and it was unguardable, because no input can reach it. The bound that
+        # does real work is MAX_CODE_VARIANTS on the total.
         for i in range(len(parts)):
             for j in range(i + 1, len(parts) + 1):
                 window = "".join(parts[i:j]).upper()
                 # a single bare part is not an identifier on its own
                 if j - i > 1 or len(window) >= 4:
                     out.add(window)
+        if len(out) >= MAX_CODE_VARIANTS:
+            break
     return out
 
 
