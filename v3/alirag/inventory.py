@@ -21,9 +21,16 @@ from .config import Config
 from .manifest import Manifest, UNKNOWN
 from .safety import SafetyGuard
 
-# revision tokens commonly used on drawings/documents: R0, R00, R01A, Rev A, Rev.2, -C3
-REV_RE = re.compile(r"(?:^|[\s_\-\(\[])(?:REV\.?\s*([A-Z]?\d{1,2}[A-Z]?)|R(\d{1,2}[A-Z]?))(?:$|[\s_\-\)\].])",
-                    re.IGNORECASE)
+# Revision tokens on drawings/documents: R0, R00, R01A, Rev.2, Rev A, Rev B.
+#
+# Alphabetic revisions (Rev A / Rev B / Rev C) are standard on drawings but the
+# earlier pattern required a digit, so those files got revision=UNKNOWN, no
+# supersede chain and no disclosure when a superseded sheet was cited (§62).
+REV_RE = re.compile(
+    r"(?:^|[\s_\-\(\[])"
+    r"(?:REV\.?\s*([A-Z]?\d{1,2}[A-Z]?|[A-Z])|R(\d{1,2}[A-Z]?))"
+    r"(?:$|[\s_\-\)\].])",
+    re.IGNORECASE)
 
 # Document-type hints, matched on WORD BOUNDARIES.
 #
@@ -109,9 +116,18 @@ def infer_metadata(path: str, source_root: str) -> dict:
     rel = os.path.relpath(path, source_root)
     parts = Path(rel).parts
     meta = {"project": UNKNOWN, "document_type": UNKNOWN,
-            "discipline": UNKNOWN, "revision": UNKNOWN}
+            "discipline": UNKNOWN, "revision": UNKNOWN,
+            "project_source": UNKNOWN}
     if len(parts) > 1 and not parts[0].startswith(("$", ".")):
+        # Folder-derived: a strong convention in this corpus, but still an
+        # INFERENCE. It is recorded with its source so downstream code (and the
+        # reviewer) can tell it apart from a project confirmed from content —
+        # "AI MAIN MEMORY" being listed as a project is what this guards
+        # against being read as fact (§4).
         meta["project"] = parts[0]
+        meta["project_source"] = "folder"
+    else:
+        meta["project_source"] = UNKNOWN
     # Match document type on the FILENAME first: a folder name higher up the
     # tree describes the project, not this file's type, and letting it decide
     # is how "AI MAIN MEMORY" mislabelled 13k files as MEMO (F-V3-04).
@@ -302,10 +318,15 @@ def _family_key(stem: str) -> str | None:
 
 
 def _rev_sort_key(rev: str):
-    m = re.match(r"R?([A-Z]*)(\d+)([A-Z]*)", rev, re.IGNORECASE)
-    if not m:
-        return (0, rev)
-    return (int(m.group(2)), m.group(3) or m.group(1) or "")
+    """Order revisions. Numeric revisions sort by number; purely alphabetic
+    ones (Rev A < Rev B < Rev C) sort by letter, after any numeric series."""
+    m = re.match(r"R?([A-Z]*)(\d+)([A-Z]*)$", rev, re.IGNORECASE)
+    if m:
+        return (0, int(m.group(2)), (m.group(3) or m.group(1) or "").upper())
+    alpha = re.match(r"R?([A-Z]+)$", rev, re.IGNORECASE)
+    if alpha:
+        return (1, 0, alpha.group(1).upper())
+    return (2, 0, rev.upper())
 
 
 def link_revision_families(mf: Manifest) -> int:

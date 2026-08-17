@@ -64,7 +64,7 @@ class Ingestor:
             segments, parser = extract_any(
                 path, ext, ocr=ocr, ocr_lang=self.cfg.ingest.ocr_lang,
                 use_docling=use_docling)
-        except (ExtractionError, Exception) as e:  # noqa: BLE001 — quarantine, never crash the run
+        except Exception as e:  # noqa: BLE001 — quarantine, never crash the run
             self.mf.set_state(fid, "FAILED", f"extract: {e}")
             self.mf.con.execute(
                 "UPDATE files SET parser_used=?, extraction_confidence=0 WHERE file_id=?",
@@ -89,8 +89,12 @@ class Ingestor:
             self.sparse.delete_file(old_ids)
             try:
                 self.dense.remove(old_ids)
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                # Swallowing this silently orphans vectors on every re-ingest,
+                # so the failure is recorded even though it must not stop the run.
+                self.mf.con.execute(
+                    "INSERT INTO ingest_log(ts,file_id,event,detail) VALUES(?,?,?,?)",
+                    (time.time(), fid, "DENSE_REMOVE_FAILED", str(e)[:300]))
             self.graph.delete_file_edges(fid)
         chunk_ids = self.mf.replace_chunks(fid, chunks)
 

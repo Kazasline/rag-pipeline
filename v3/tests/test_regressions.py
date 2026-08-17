@@ -208,7 +208,7 @@ def test_empty_answer_is_reported_not_presented_as_supported(cfg, corpus, monkey
     resp = eng.query("find LAI-003", use_cache=False)
 
     assert resp["answer"], "must not return an empty answer string"
-    assert resp["confidence"] == 0.0, "an empty generation cannot be high-confidence"
+    assert resp["evidence_score"] == 0.0, "an empty generation cannot score high"
     assert resp["evidence_status"] != "SUPPORTED"
     assert "reasoning tokens" in resp["generation_error"]
     assert resp["sources"], "retrieved evidence must still be reported"

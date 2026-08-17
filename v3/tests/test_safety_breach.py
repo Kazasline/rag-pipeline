@@ -219,3 +219,198 @@ def test_dense_filter_applied_before_topk(tmp_path):
     hits = store.search(q, k=5, allowed_chunks={401})
     assert hits, "in-project chunk must be found even when it ranks low overall"
     assert all(h["chunk_id"] == 401 for h in hits), hits
+
+
+# ---------------------------------------------------------------- reviewer F21-F23
+def _write_questions(path, records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+
+
+def test_bench_refuses_unreviewed_questions(cfg, tmp_path):
+    """Deleting the REVIEW-ME prefix used to make a placeholder count."""
+    from alirag.bench import BenchmarkError, run_retrieval_bench
+    qf = tmp_path / "q.jsonl"
+    _write_questions(qf, [{"q": "ask about the tender specification",
+                           "expect_file": "Landscape Tender Spec R01.txt",
+                           "project": "Dawson"}])          # no reviewed flag
+    try:
+        run_retrieval_bench(cfg, qf)
+        raise AssertionError("must refuse a question not marked reviewed")
+    except BenchmarkError as e:
+        assert "reviewed" in str(e)
+
+
+def test_bench_refuses_a_bare_extension_as_expected_file(cfg, tmp_path):
+    """expect_file ".txt" matched every file and scored Recall@5 = 1.0."""
+    from alirag.bench import BenchmarkError, run_retrieval_bench
+    qf = tmp_path / "q.jsonl"
+    _write_questions(qf, [{"q": "which tender covers zone B?",
+                           "expect_file": ".txt", "project": "Dawson",
+                           "reviewed": True}])
+    try:
+        run_retrieval_bench(cfg, qf)
+        raise AssertionError("must refuse an extension as an expected source")
+    except BenchmarkError as e:
+        assert "extension" in str(e) or "too short" in str(e)
+
+
+def test_bench_refuses_questions_without_a_project(cfg, tmp_path):
+    """Missing project => wrong_project_rate 0.0 => reviewer gate passes on
+    something that was never measured. The most dangerous accidental bypass."""
+    from alirag.bench import BenchmarkError, run_retrieval_bench
+    qf = tmp_path / "q.jsonl"
+    _write_questions(qf, [{"q": "which tender covers zone B?",
+                           "expect_file": "Landscape Tender Spec R01.txt",
+                           "reviewed": True}])
+    try:
+        run_retrieval_bench(cfg, qf)
+        raise AssertionError("must refuse a question with no project")
+    except BenchmarkError as e:
+        assert "project" in str(e)
+
+
+def test_bench_refuses_a_mislabelled_run(ingested, tmp_path):
+    """--label fast on DEEP questions satisfied the FAST reviewer gate."""
+    from alirag.bench import BenchmarkError, run_retrieval_bench
+    cfg, _ = ingested
+    qf = tmp_path / "q.jsonl"
+    _write_questions(qf, [{"q": "why was the turf specification revised?",
+                           "expect_file": "LAI-003 turf instruction.txt",
+                           "project": "Dawson", "reviewed": True,
+                           "mode": "DEEP"}])
+    try:
+        run_retrieval_bench(cfg, qf, label="fast", use_llm=False)
+        raise AssertionError("must refuse a FAST label on a DEEP run")
+    except BenchmarkError as e:
+        assert "label" in str(e).lower() and "DEEP" in str(e)
+
+
+def test_bench_report_records_real_hardware_and_sample_size(ingested, tmp_path):
+    from alirag.bench import run_retrieval_bench
+    cfg, _ = ingested
+    qf = tmp_path / "q.jsonl"
+    _write_questions(qf, [
+        {"q": "which document is the turf instruction?",
+         "expect_file": "LAI-003 turf instruction.txt",
+         "project": "Dawson", "reviewed": True},
+        {"q": "what does the tender say about rain trees?",
+         "expect_file": "Landscape Tender Spec R01.txt",
+         "project": "Dawson", "reviewed": True},
+    ])
+    rep = run_retrieval_bench(cfg, qf, label="adhoc", use_llm=False)
+    assert isinstance(rep["machine"], dict)
+    assert "gpu" in rep["machine"] and "ram" in rep["machine"]
+    assert rep["wrong_project_measured"] == rep["questions"]
+    assert rep["latency_ms"]["percentiles_meaningful"] is False, \
+        "n=2 must not be presented as a meaningful percentile"
+
+
+# ---------------------------------------------------------------- reviewer F15
+def test_graph_ranks_by_hop_distance_not_ingestion_order(tmp_path):
+    """chunk_ids were returned sorted ascending — i.e. insertion order — and
+    RRF ranks by position, so the graph leg injected positional bias."""
+    from alirag.graph import Graph
+    g = Graph(tmp_path / "g.sqlite")
+    seed = g.node("DOCUMENT", "LAI-003.pdf")
+    near = g.node("DOCUMENT", "near.pdf")
+    far = g.node("DOCUMENT", "far.pdf")
+    # deliberately give the CLOSE chunk a HIGHER id than the distant one, so
+    # ingestion order and hop order disagree
+    g.edge(seed, near, "REFERENCES", file_id=1, chunk_id=999)
+    g.edge(near, far, "REFERENCES", file_id=2, chunk_id=100)
+    g.con.commit()
+
+    hood = g.neighborhood(["LAI-003"], hops=2)
+    ids = hood["chunk_ids"]
+    assert ids.index(999) < ids.index(100), \
+        f"1-hop chunk must outrank 2-hop chunk, got {ids}"
+    assert hood["chunk_hops"][999] < hood["chunk_hops"][100]
+    g.close()
+
+
+def test_graph_seed_wildcards_are_escaped(tmp_path):
+    """An unescaped LIKE seed matched unrelated nodes wholesale."""
+    from alirag.graph import Graph
+    g = Graph(tmp_path / "g.sqlite")
+    a = g.node("DOCUMENT", "tender spec.pdf")
+    b = g.node("DOCUMENT", "unrelated.pdf")
+    g.edge(a, b, "REFERENCES", file_id=1, chunk_id=1)
+    g.con.commit()
+    hood = g.neighborhood(["%"], hops=1)      # would match everything unescaped
+    assert not hood["edges"], "a bare % must not match every node"
+    g.close()
+
+
+# ---------------------------------------------------------------- reviewer F18
+def test_lexical_tiebreak_uses_whole_words_and_strips_punctuation():
+    """"cost" matched "costume"; "amount?" matched nothing."""
+    from alirag.retrieve import _lexical_tiebreak
+    hits = [{"chunk_id": 1, "score": 1.0, "text": "the costume budget"},
+            {"chunk_id": 2, "score": 1.0, "text": "the cost of works"}]
+    out = _lexical_tiebreak("what is the cost?", hits)
+    by_id = {h["chunk_id"]: h for h in out}
+    assert by_id[2]["lexical_overlap"] > by_id[1]["lexical_overlap"], \
+        "substring matching made 'costume' score like 'cost'"
+    # punctuation-attached query terms must still match
+    assert _lexical_tiebreak("amount?", [{"chunk_id": 3, "score": 1.0,
+                                          "text": "total amount due"}])[0][
+        "lexical_overlap"] == 1.0
+
+
+# ---------------------------------------------------------------- reviewer F13/F14
+def test_cache_invalidated_by_retrieval_policy_and_prompt(ingested, monkeypatch):
+    """Halving evidence_k, or rewriting the system prompt, still served the
+    old cached answer."""
+    import alirag.answer as answer_mod
+    from alirag.answer import Engine
+    cfg, _ = ingested
+
+    fake = lambda *a, **k: {"text": "jawapan", "ttft_ms": 5.0, "gen_ms": 5.0,
+                            "tokens": 1, "reasoning_tokens": 0,
+                            "finish_reason": "stop", "empty_reason": None,
+                            "tokens_per_s": 1.0}
+    eng = Engine(cfg)
+    monkeypatch.setattr(eng.llm, "chat", fake)
+    eng.query("find LAI-003", use_cache=True)
+    assert eng.query("find LAI-003", use_cache=True)["cached"] is True
+    eng.close()
+
+    cfg.policies["FAST"].evidence_k = 1          # different retrieval shape
+    eng2 = Engine(cfg)
+    monkeypatch.setattr(eng2.llm, "chat", fake)
+    assert eng2.query("find LAI-003", use_cache=True)["cached"] is False, \
+        "changing the retrieval policy must invalidate cached answers"
+    eng2.close()
+
+    monkeypatch.setattr(answer_mod, "SYSTEM_PROMPT", "A completely new prompt.")
+    eng3 = Engine(cfg)
+    monkeypatch.setattr(eng3.llm, "chat", fake)
+    assert eng3.query("find LAI-003", use_cache=True)["cached"] is False, \
+        "changing the system prompt must invalidate cached answers"
+    eng3.close()
+
+
+def test_cache_hits_do_not_pollute_latency_metrics(ingested, monkeypatch):
+    """Cache-hit traces (~0ms) were aggregated into the p50 quoted as system
+    latency, and cached responses replayed their original timings."""
+    from alirag.answer import Engine
+    from alirag.instrument import percentiles
+    cfg, _ = ingested
+
+    eng = Engine(cfg)
+    monkeypatch.setattr(eng.llm, "chat", lambda *a, **k: {
+        "text": "jawapan", "ttft_ms": 5.0, "gen_ms": 5.0, "tokens": 1,
+        "reasoning_tokens": 0, "finish_reason": "stop",
+        "empty_reason": None, "tokens_per_s": 1.0})
+    first = eng.query("find LAI-003", use_cache=True)
+    second = eng.query("find LAI-003", use_cache=True)
+    assert second["cached"] is True
+    assert "cache_hit" in second["latency_ms"], \
+        "a cache hit must not replay the original request's timings"
+    assert second["latency_ms"] != first["latency_ms"]
+
+    pct = percentiles(cfg.dir("query_history") / "query_traces.jsonl")
+    assert pct["cache_hits_excluded"] >= 1
+    assert pct["total_ms"]["percentiles_meaningful"] is False
+    eng.close()

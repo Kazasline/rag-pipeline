@@ -120,9 +120,13 @@ class Retriever:
             te = time.perf_counter()
             qvec = self.embedder.embed([query])[0]
             embed_s = time.perf_counter() - te
-            try:
+            # Dispatch on the backend's actual capability rather than by
+            # catching TypeError: a TypeError raised INSIDE a backend's search
+            # would otherwise trigger a retry with a signature it rejects,
+            # masking the real error behind a misleading second one.
+            if hasattr(self.dense, "supports_project_filter"):
                 r = self.dense.search(qvec, k=policy.dense_k, project=project)
-            except TypeError:
+            else:
                 r = self.dense.search(qvec, k=policy.dense_k,
                                       allowed_chunks=allowed)
             return r, time.perf_counter() - t, embed_s
@@ -165,28 +169,35 @@ class Retriever:
             hydrated = [h for h in hydrated if h["chunk_id"] in allowed]
         trace.stage("fusion", time.perf_counter() - t0, {"fused": len(hydrated)})
 
-        # optional rerank (DEEP/FULLSWING). Placeholder = lexical-overlap
-        # scoring; a cross-encoder goes here only if the benchmark proves the
-        # latency is paid back in accuracy (§37).
+        # Lexical tie-break (DEEP/FULLSWING). NOT a reranker: it is a cheap
+        # term-overlap nudge, and calling it "rerank" invited readers to assume
+        # cross-encoder reranking. A real reranker goes here only if the
+        # benchmark proves the latency is paid back in accuracy (§37).
         if policy.rerank and hydrated:
             t0 = time.perf_counter()
-            hydrated = _overlap_rerank(query, hydrated)
-            trace.stage("rerank", time.perf_counter() - t0)
+            hydrated = _lexical_tiebreak(query, hydrated)
+            trace.stage("lexical_tiebreak", time.perf_counter() - t0)
 
         return hydrated[:policy.evidence_k]
 
 
-def _overlap_rerank(query: str, hits: list[dict]) -> list[dict]:
-    """Cheap, deterministic secondary signal: fraction of distinct query terms
-    present in the chunk. Combined with fused score to break near-ties without
-    an extra model in VRAM (§35/§37)."""
-    qterms = {w.lower() for w in query.split() if len(w) > 2}
+def _lexical_tiebreak(query: str, hits: list[dict]) -> list[dict]:
+    r"""Cheap deterministic nudge: fraction of distinct query terms appearing as
+    WHOLE WORDS in the chunk, used to break near-ties in the fused score.
+
+    Two corrections over the previous version: terms are tokenized with \w+
+    rather than split on whitespace (so "amount?" and "Dawson," could never
+    match anything), and matching is word-boundary rather than substring (so
+    "cost" no longer matches "costume").
+    """
+    import re as _re
+    qterms = {w.lower() for w in _re.findall(r"\w+", query) if len(w) > 2}
     if not qterms:
         return hits
     rescored = []
     for h in hits:
-        tl = h["text"].lower()
-        overlap = sum(1 for w in qterms if w in tl) / len(qterms)
-        rescored.append({**h, "rerank_score": round(overlap, 3),
+        words = set(_re.findall(r"\w+", h["text"].lower()))
+        overlap = len(qterms & words) / len(qterms)
+        rescored.append({**h, "lexical_overlap": round(overlap, 3),
                          "score": h["score"] * (1.0 + overlap)})
     return sorted(rescored, key=lambda x: -x["score"])

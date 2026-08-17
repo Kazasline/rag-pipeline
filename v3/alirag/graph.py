@@ -53,6 +53,11 @@ CODE_TYPES = [
 ]
 
 
+def _like_escape(s: str) -> str:
+    """Escape SQL LIKE wildcards so a seed cannot match the whole graph."""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def code_node_type(code: str) -> str:
     for rx, t in CODE_TYPES:
         if rx.match(code):
@@ -147,13 +152,22 @@ class Graph:
         seeds = []
         for name in seed_names:
             norm = normalize_id(name) if any(c.isdigit() for c in name) else name.strip().lower()
+            # Escape LIKE wildcards in BOTH patterns. Escaping only the name
+            # left `key LIKE '%:%'`, which matches every node — keys are all
+            # "TYPE:value" — so a seed of "%" still pulled in the whole graph.
+            safe_name = _like_escape(name.strip())
+            safe_norm = _like_escape(norm)
             rows = self.con.execute(
-                "SELECT node_id FROM nodes WHERE key LIKE ? OR name LIKE ?",
-                (f"%:{norm}", f"%{name.strip()}%")).fetchall()
+                "SELECT node_id FROM nodes WHERE key LIKE ? ESCAPE '\\' "
+                "OR name LIKE ? ESCAPE '\\'",
+                (f"%:{safe_norm}", f"%{safe_name}%")).fetchall()
             seeds.extend(r[0] for r in rows)
         frontier, visited = set(seeds), set(seeds)
+        # Track how many hops from a seed each node is, so results can be
+        # ordered by graph distance rather than by insertion order.
+        depth = {n: 0 for n in seeds}
         edges_out = []
-        for _ in range(max(0, hops)):
+        for hop in range(max(0, hops)):
             if not frontier or len(edges_out) >= limit:
                 break
             q = ",".join("?" * len(frontier))
@@ -164,11 +178,13 @@ class Graph:
             nxt = set()
             for eid, src, dst, rel, fid, cid, ev in rows:
                 edges_out.append({"src": src, "dst": dst, "relation": rel,
-                                  "file_id": fid, "chunk_id": cid, "evidence": ev})
+                                  "file_id": fid, "chunk_id": cid,
+                                  "evidence": ev, "hop": hop + 1})
                 for n in (src, dst):
                     if n not in visited:
                         nxt.add(n)
                         visited.add(n)
+                        depth[n] = hop + 1
                 if len(edges_out) >= limit:
                     break
             frontier = nxt
@@ -179,8 +195,24 @@ class Graph:
                          for r in self.con.execute(
                              f"SELECT node_id, type, name FROM nodes WHERE node_id IN ({q})",
                              list(visited))]
-        chunk_ids = sorted({e["chunk_id"] for e in edges_out if e["chunk_id"]})
-        return {"nodes": node_rows, "edges": edges_out, "chunk_ids": chunk_ids}
+        # Rank by graph distance, then by how many edges support the chunk.
+        #
+        # Previously this returned `sorted(set(...))` — chunk_ids ascending,
+        # i.e. INGESTION ORDER. Since RRF scores by list position, the graph leg
+        # was injecting a fixed positional bias rather than a relevance signal,
+        # which is not something that can earn its place under §89.
+        best_hop: dict[int, int] = {}
+        support: dict[int, int] = {}
+        for e in edges_out:
+            cid = e["chunk_id"]
+            if not cid:
+                continue
+            hop = e.get("hop", 1)
+            best_hop[cid] = min(best_hop.get(cid, hop), hop)
+            support[cid] = support.get(cid, 0) + 1
+        chunk_ids = sorted(best_hop, key=lambda c: (best_hop[c], -support[c], c))
+        return {"nodes": node_rows, "edges": edges_out, "chunk_ids": chunk_ids,
+                "chunk_hops": best_hop}
 
     def stats(self) -> dict:
         return {"nodes": self.con.execute("SELECT COUNT(*) FROM nodes").fetchone()[0],

@@ -69,11 +69,21 @@ def audit(cfg: Config) -> dict:
         ok = None
         detail = f"§8{'0' if mode == 'FAST' else '1' if mode == 'DEEP' else '2'}: real benchmark run for {mode}"
         if rep:
+            # An artifact is not evidence unless the thing it certifies was
+            # actually measured: a wrong-project rate computed over zero
+            # questions reads as a perfect 0.0, and a report labelled for one
+            # mode may have executed another.
+            measured = rep.get("wrong_project_measured", 0)
+            modes = rep.get("modes_run") or []
             ok = (rep.get("questions", 0) >= 5
                   and rep.get("recall", {}).get("@5", 0) > 0
+                  and measured >= rep.get("questions", 0)
+                  and modes == [mode]
                   and rep.get("wrong_project_rate", 1.0) < 0.2)
             detail += (f" — recall@5={rep.get('recall', {}).get('@5')}, "
-                       f"wrong_project={rep.get('wrong_project_rate')}, "
+                       f"wrong_project={rep.get('wrong_project_rate')} "
+                       f"(measured on {measured} questions), "
+                       f"modes_run={modes}, "
                        f"p95={rep.get('latency_ms', {}).get('p95')}ms")
         item(f"{mode}_MODE", _latest(f"report_{mode.lower()}*.json", bench_dir),
              ok, detail)
@@ -111,9 +121,15 @@ def audit(cfg: Config) -> dict:
     ok = None
     detail = "§10: FAST retrieval p95 target ~250ms (objective, not fabricated)"
     if fast:
-        p95 = fast.get("latency_ms", {}).get("p95")
-        ok = p95 is not None and p95 <= 2000  # end-to-end incl. LLM; retrieval-only stricter
-        detail += f" — measured end-to-end p95={p95}ms"
+        lat = fast.get("latency_ms", {})
+        p95 = lat.get("p95")
+        meaningful = lat.get("percentiles_meaningful", False)
+        # Below ~20 samples p95 collapses onto the maximum, so certifying a
+        # latency objective from it would be false precision.
+        ok = (p95 is not None and meaningful and p95 <= 2000)
+        detail += (f" — measured end-to-end p95={p95}ms over n={lat.get('n')}"
+                   + ("" if meaningful else
+                      " (SAMPLE TOO SMALL for a percentile — needs n>=20)"))
     item("LATENCY", _latest("report_fast*.json", bench_dir), ok, detail)
 
     # RETRIEVAL QUALITY — recall/MRR thresholds on validated question set (§44)

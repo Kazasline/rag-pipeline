@@ -47,12 +47,19 @@ def percentile(values: list[float], p: float) -> float:
     return xs[idx]
 
 
-def percentiles(trace_log: str | Path, mode: str | None = None) -> dict:
-    """Aggregate p50/p95/p99 per stage + total from a trace JSONL."""
+def percentiles(trace_log: str | Path, mode: str | None = None,
+                include_cached: bool = False) -> dict:
+    """Aggregate p50/p95/p99 per stage + total from a trace JSONL.
+
+    Cache hits are EXCLUDED by default: they cost ~0 ms and describe no
+    retrieval or generation work, so mixing them in silently deflated the p50
+    that gets quoted as system latency.
+    """
     stages: dict[str, list[float]] = {}
     totals: list[float] = []
     ttfts: list[float] = []
     n = 0
+    cached_skipped = 0
     path = Path(trace_log)
     if not path.exists():
         return {"queries": 0, "note": "no traces recorded yet — run real queries first"}
@@ -64,6 +71,9 @@ def percentiles(trace_log: str | Path, mode: str | None = None) -> dict:
                 continue
             if mode and rec.get("mode") != mode:
                 continue
+            if rec.get("cached") and not include_cached:
+                cached_skipped += 1
+                continue
             n += 1
             if "total_ms" in rec:
                 totals.append(rec["total_ms"])
@@ -71,12 +81,15 @@ def percentiles(trace_log: str | Path, mode: str | None = None) -> dict:
                 ttfts.append(rec["ttft_ms"])
             for s, ms in rec.get("stages", {}).items():
                 stages.setdefault(s, []).append(ms)
-    out = {"queries": n, "mode": mode or "ALL"}
+    out = {"queries": n, "mode": mode or "ALL",
+           "cache_hits_excluded": cached_skipped}
     for name, vals in [("total_ms", totals), ("ttft_ms", ttfts),
                        *stages.items()]:
         if vals:
             out[name] = {"p50": round(percentile(vals, 50), 1),
                          "p95": round(percentile(vals, 95), 1),
                          "p99": round(percentile(vals, 99), 1),
-                         "n": len(vals)}
+                         "n": len(vals),
+                         # p95/p99 collapse onto the maximum for small samples
+                         "percentiles_meaningful": len(vals) >= 20}
     return out

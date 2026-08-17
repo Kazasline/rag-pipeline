@@ -63,12 +63,19 @@ def test_bench_refuses_unreviewed_template(ingested):
 def test_bench_real_run_produces_metrics(ingested):
     cfg, _ = ingested
     qf = cfg.dir("benchmark") / "questions.jsonl"
+    # Every field the hardened gates require: a real question, a document-
+    # identifying expectation, an explicit project so the wrong-project rate is
+    # genuinely measured, and a human's reviewed flag.
     qs = [
-        {"q": "find LAI-003", "expect_file": "LAI-003", "kind": "exact", "mode": ""},
-        {"q": "rain tree trunk diameter", "expect_file": "Tender Spec R01",
-         "kind": "semantic", "mode": "", "_project": "Dawson"},
-        {"q": "Ficus microcarpa spec", "expect_file": "Landscape Spec",
-         "kind": "semantic", "mode": "", "_project": "Meridian"},
+        {"q": "which document is the LAI-003 turf instruction?",
+         "expect_file": "LAI-003 turf instruction.txt", "kind": "exact",
+         "mode": "", "project": "Dawson", "reviewed": True},
+        {"q": "what trunk diameter is required for the rain trees?",
+         "expect_file": "Landscape Tender Spec R01.txt",
+         "kind": "semantic", "mode": "", "project": "Dawson", "reviewed": True},
+        {"q": "what does the Meridian spec require for Ficus microcarpa?",
+         "expect_file": "Landscape Spec.txt",
+         "kind": "semantic", "mode": "", "project": "Meridian", "reviewed": True},
     ]
     qf.write_text("\n".join(json.dumps(q) for q in qs), encoding="utf-8")
     rep = run_retrieval_bench(cfg, qf, label="fast")

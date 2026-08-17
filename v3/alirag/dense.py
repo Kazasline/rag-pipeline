@@ -111,6 +111,10 @@ class MemmapDense:
 
 
 class QdrantDense:
+    # Declares that search() accepts `project=` — the orchestrator dispatches
+    # on this rather than probing with a try/except (see retrieve.py).
+    supports_project_filter = True
+
     def __init__(self, url: str, collection: str, dim: int):
         from qdrant_client import QdrantClient
         from qdrant_client.models import Distance, VectorParams

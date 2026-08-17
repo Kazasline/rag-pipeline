@@ -83,13 +83,29 @@ class Engine:
         it must not survive (F-V3-12). Otherwise a fixed bug keeps being served
         from cache and looks unfixed.
         """
+        import dataclasses
+
         from . import PIPELINE_VERSION
         row = self.mf.con.execute(
             "SELECT COUNT(*), IFNULL(MAX(indexed_at),0) FROM files").fetchone()
         cfg = self.cfg.llm
-        return (f"{row[0]}:{row[1]}:{PIPELINE_VERSION}:{cfg.api_style}:"
-                f"{cfg.model}:{cfg.model_fast}:{cfg.model_deep}:"
-                f"{cfg.model_fullswing}:{cfg.max_answer_tokens_fast}")
+        # Everything that shapes the answer belongs in the key — including the
+        # retrieval policy and the system prompt. Omitting them meant halving
+        # evidence_k, or rewriting the prompt outright, still served the old
+        # answer from cache.
+        policy_repr = json.dumps(
+            {m: dataclasses.asdict(p) for m, p in sorted(self.cfg.policies.items())},
+            sort_keys=True)
+        shape = "|".join([
+            PIPELINE_VERSION, cfg.api_style, cfg.model, cfg.model_fast,
+            cfg.model_deep, cfg.model_fullswing,
+            str(cfg.max_answer_tokens_fast), str(cfg.max_answer_tokens_deep),
+            str(cfg.max_answer_tokens_fullswing),
+            self.cfg.embed.model, str(self.cfg.embed.dim),
+            policy_repr, SYSTEM_PROMPT,
+        ])
+        digest = hashlib.blake2b(shape.encode("utf-8"), digest_size=8).hexdigest()
+        return f"{row[0]}:{row[1]}:{digest}"
 
     # ------------------------------------------------------------ main
     def query(self, query: str, mode_override: str | None = None,
@@ -114,10 +130,17 @@ class Engine:
                 cached = json.loads(cache_path.read_text(encoding="utf-8"))
                 if cached.get("_fingerprint") == fp:
                     cached["cached"] = True
+                    # Do NOT replay the latency recorded when this answer was
+                    # first computed: it was measured for a different request
+                    # and, aggregated, it deflated the p50 the operator reads.
+                    cached.pop("latency_ms", None)
+                    cached.pop("ttft_ms", None)
                     trace.stage("cache_hit", 0.0)
                     trace.set("cached", True)
                     trace.finish()
                     trace.save(self.cfg.dir("query_history"))
+                    cached["latency_ms"] = {"cache_hit": 0.0,
+                                            "total": trace.data["total_ms"]}
                     return cached
             except (json.JSONDecodeError, OSError):
                 pass
@@ -176,7 +199,7 @@ class Engine:
             found = "; ".join(f"{h['filename']} ({h.get('locator') or ''})"
                               for h in verdict.kept[:3])
             note = f" Nearest matches: {found}." if found else ""
-            return {**base, "confidence": 0.0,
+            return {**base, "evidence_score": 0.0,
                     "answer": (INSUFFICIENT_FAST if r.mode == "FAST"
                                else INSUFFICIENT + note)}
 
@@ -199,7 +222,7 @@ class Engine:
                     {"context_chars": len(context)})
 
         if not use_llm:
-            return {**base, "confidence": _confidence(verdict),
+            return {**base, "evidence_score": _evidence_score(verdict),
                     "answer": "(retrieval-only mode) " + (verdict.kept[0]["text"][:300]
                                                           if verdict.kept else "")}
 
@@ -208,7 +231,7 @@ class Engine:
         try:
             out = self.llm.chat(SYSTEM_PROMPT, user_msg, mode=r.mode)
         except LLMError as e:
-            return {**base, "confidence": _confidence(verdict),
+            return {**base, "evidence_score": _evidence_score(verdict),
                     "answer": f"(LLM unavailable: {e}) Top evidence:\n"
                               + "\n".join(f"[{i}] {h['text'][:200]}"
                                           for i, h in enumerate(verdict.kept[:3], 1))}
@@ -227,7 +250,7 @@ class Engine:
             reason = out.get("empty_reason") or "model returned no content"
             return {**base,
                     "evidence_status": "PARTIAL",
-                    "confidence": 0.0,
+                    "evidence_score": 0.0,
                     "answer": (f"Retrieval succeeded but the model produced no answer "
                                f"({reason}). The evidence found is listed under sources."),
                     "generation_error": reason,
@@ -235,7 +258,7 @@ class Engine:
                     "reasoning_tokens": out.get("reasoning_tokens"),
                     "finish_reason": out.get("finish_reason")}
 
-        return {**base, "confidence": _confidence(verdict), "answer": out["text"],
+        return {**base, "evidence_score": _evidence_score(verdict), "answer": out["text"],
                 "ttft_ms": out["ttft_ms"], "tokens_per_s": out["tokens_per_s"],
                 "reasoning_tokens": out.get("reasoning_tokens"),
                 "finish_reason": out.get("finish_reason")}
@@ -252,13 +275,26 @@ def _loc(h: dict) -> str:
 def _source_line(h: dict) -> dict:
     """§40 provenance: file + page/sheet/slide + revision + project + path."""
     return {"file": h["filename"], "location": _loc(h),
+            # identifiers so a citation can be followed programmatically —
+            # /source/{file_id} exists but the citation did not carry the id
+            "file_id": h.get("file_id"), "chunk_id": h.get("chunk_id"),
+            "page": h.get("page"),
             "revision": h.get("revision"), "project": h.get("project"),
             "path": h.get("path"),
             "superseded": bool(h.get("superseded_by")),
             "retrievers": h.get("sources", [])}
 
 
-def _confidence(verdict) -> float:
+def _evidence_score(verdict) -> float:
+    """A coarse function of evidence STATUS and COUNT — not a calibrated
+    confidence.
+
+    It was previously published as `confidence`, which invited the reader to
+    treat it as a probability of correctness: an off-corpus question scored
+    0.63. It has no relationship to retrieval scores or measured accuracy, so
+    it is named for what it actually is, and `confidence` is only emitted once
+    calibration exists.
+    """
     if verdict.status == "INSUFFICIENT":
         return 0.0
     base = 0.85 if verdict.status == "SUPPORTED" else 0.55

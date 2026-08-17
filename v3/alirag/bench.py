@@ -34,6 +34,21 @@ class BenchmarkError(RuntimeError):
     pass
 
 
+def _machine_fingerprint() -> dict:
+    """Identify the hardware a number was measured on.
+
+    `platform.platform()` alone records only OS and kernel, so it cannot
+    support the claim that a figure is tied to specific hardware — the GPU and
+    memory that dominate these measurements were absent from it entirely.
+    """
+    import os as _os
+    from .inspect_machine import inspect_gpu, inspect_ram
+    return {"platform": platform.platform(),
+            "cpu_count": _os.cpu_count(),
+            "gpu": inspect_gpu(),
+            "ram": inspect_ram()}
+
+
 def make_template(cfg: Config, out_path: Path | None = None, n: int = 30) -> Path:
     """Draft a benchmark question file from real indexed files (locally).
     Expectations reference actual paths; the QUESTIONS ARE PLACEHOLDERS the
@@ -51,9 +66,10 @@ def make_template(cfg: Config, out_path: Path | None = None, n: int = 30) -> Pat
         raise BenchmarkError("no indexed files — ingest before building a benchmark")
     out_path = out_path or cfg.dir("benchmark") / "questions.draft.jsonl"
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write('{"_comment": "REVIEW EVERY LINE: replace q with a real question '
-                'a user would ask whose answer lives in expect_file. Delete lines '
-                'that make no sense. Scores are meaningless until reviewed."}\n')
+        f.write('{"_comment": "REVIEW EVERY LINE. Replace q with a real question '
+                'whose answer lives in expect_file, confirm expect_file names a '
+                'specific document, set project, then set reviewed:true. The '
+                'harness refuses to score any line where reviewed is not true."}\n')
         for r in rows:
             snippet = " ".join((r["text"] or "")[:120].split())
             f.write(json.dumps({
@@ -61,28 +77,64 @@ def make_template(cfg: Config, out_path: Path | None = None, n: int = 30) -> Pat
                 "expect_file": r["filename"],
                 "expect_page": r["page"],
                 "kind": "semantic", "mode": "",
-                "_project": r["project"], "_type": r["document_type"],
+                "project": r["project"],
+                "reviewed": False,          # a human must set this to true
+                "_type": r["document_type"],
             }, ensure_ascii=False) + "\n")
     return Path(out_path)
+
+
+# A question is unusable as evidence unless a human actually wrote it.
+# The reviewer showed the old check was defeated by deleting nine characters
+# from the placeholder text, so the gate now rests on a signed marker the
+# generator writes and the reviewer must consciously flip, plus structural
+# checks that a lazy edit cannot satisfy.
+MIN_EXPECT_LEN = 6
+
+
+def _validate_question(rec: dict, idx: int) -> None:
+    """Reject questions that cannot produce a meaningful score."""
+    q = (rec.get("q") or "").strip()
+    expect = (rec.get("expect_file") or "").strip()
+    if rec.get("reviewed") is not True:
+        raise BenchmarkError(
+            f"question {idx} is not marked reviewed. Every question must carry "
+            '"reviewed": true, set by a human who confirmed the question is '
+            "real and the expected source is correct (§43).")
+    if len(q) < 10 or q.upper().startswith("REVIEW-ME"):
+        raise BenchmarkError(f"question {idx} is a placeholder or too short: {q!r}")
+    if len(expect) < MIN_EXPECT_LEN:
+        raise BenchmarkError(
+            f"question {idx}: expect_file {expect!r} is too short to identify a "
+            "document. A bare extension matches every file and scores a "
+            "meaningless Recall@K of 1.0.")
+    if expect.startswith(".") and "/" not in expect and "\\" not in expect:
+        raise BenchmarkError(
+            f"question {idx}: expect_file {expect!r} is an extension, not a "
+            "document — it would match the whole corpus.")
+    if not rec.get("project"):
+        raise BenchmarkError(
+            f"question {idx}: missing \"project\". Without it the "
+            "wrong-project rate cannot be computed, and an unmeasured rate of "
+            "0.0 would silently satisfy the reviewer gate.")
 
 
 def _load_questions(path: Path) -> list[dict]:
     qs = []
     with open(path, encoding="utf-8") as f:
-        for line in f:
+        for i, line in enumerate(f, 1):
             line = line.strip()
             if not line:
                 continue
             rec = json.loads(line)
             if "_comment" in rec:
                 continue
-            if rec.get("q", "").startswith("REVIEW-ME"):
-                continue  # unreviewed placeholders never count
+            _validate_question(rec, i)
             qs.append(rec)
     if not qs:
         raise BenchmarkError(
-            f"no validated questions in {path} — review the draft first "
-            "(REVIEW-ME placeholders are excluded by design)")
+            f"no validated questions in {path} — a benchmark cannot be scored "
+            "from an empty or unreviewed set (§43)")
     return qs
 
 
@@ -113,11 +165,13 @@ def run_retrieval_bench(cfg: Config, questions_path: Path,
         if first and rec.get("expect_page"):
             src = resp["sources"][first - 1]
             page_ok = str(rec["expect_page"]) in str(src.get("location", ""))
-        wrong_project = False
-        if rec.get("_project"):
-            wrong_project = any(
-                s.get("project") not in (rec["_project"], "UNKNOWN", None)
-                for s in resp.get("sources", [])[:3])
+        # `project` is mandatory (see _validate_question), so this is always
+        # genuinely measured. Reporting 0.0 for "not checked" is what let an
+        # unmeasured benchmark satisfy the reviewer's wrong-project gate.
+        expected_project = rec.get("project")
+        wrong_project = any(
+            s.get("project") not in (expected_project, "UNKNOWN", None)
+            for s in resp.get("sources", [])[:3])
         per_q.append({"q": rec["q"], "kind": rec.get("kind"), "mode": resp["mode"],
                       "first_rank": first, "page_ok": page_ok,
                       "wrong_project_in_top3": wrong_project,
@@ -126,9 +180,17 @@ def run_retrieval_bench(cfg: Config, questions_path: Path,
     eng.close()
 
     n = len(per_q)
+    modes_run = sorted({r["mode"] for r in per_q})
+    if label.upper() in ("FAST", "DEEP", "FULLSWING") and modes_run != [label.upper()]:
+        raise BenchmarkError(
+            f"--label {label} claims a {label.upper()} benchmark but the run "
+            f"actually executed modes {modes_run}. A mislabelled artifact would "
+            f"satisfy the reviewer's {label.upper()} gate with the wrong data.")
+
     report = {
         "label": label, "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "machine": platform.platform(),
+        "modes_run": modes_run,
+        "machine": _machine_fingerprint(),
         "index_stats": stats, "questions": n, "use_llm": use_llm,
         "recall": {f"@{k}": round(sum(1 for r in per_q
                                       if r["first_rank"] and r["first_rank"] <= k) / n, 3)
@@ -137,9 +199,14 @@ def run_retrieval_bench(cfg: Config, questions_path: Path,
         "citation_page_accuracy": _ratio([r["page_ok"] for r in per_q]),
         "wrong_project_rate": round(
             sum(1 for r in per_q if r["wrong_project_in_top3"]) / n, 3),
+        "wrong_project_measured": n,   # explicit: how many questions were checked
         "latency_ms": {"p50": round(percentile(latencies, 50), 1),
                        "p95": round(percentile(latencies, 95), 1),
-                       "p99": round(percentile(latencies, 99), 1)},
+                       "p99": round(percentile(latencies, 99), 1),
+                       "n": len(latencies),
+                       # below ~20 samples p95 and p99 both collapse onto the
+                       # maximum; reporting them as percentiles is false precision
+                       "percentiles_meaningful": len(latencies) >= 20},
         "per_question": per_q,
     }
     out = cfg.dir("benchmark") / f"report_{label}_{int(time.time())}.json"

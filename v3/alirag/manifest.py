@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS files(
     modified_date  TEXT,
     mtime_ns       INTEGER,
     project        TEXT DEFAULT 'UNKNOWN',
+    project_source TEXT DEFAULT 'UNKNOWN',   -- folder | content | manual (§4 provenance)
     client         TEXT DEFAULT 'UNKNOWN',
     document_type  TEXT DEFAULT 'UNKNOWN',
     discipline     TEXT DEFAULT 'UNKNOWN',

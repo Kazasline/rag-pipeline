@@ -60,7 +60,8 @@ def _http_error_detail(e) -> str:
     return f"HTTP {e.code} {e.reason}" + (f" — {body}" if body else "")
 
 
-def _empty_reason(text: str, reasoning_tokens: int, finish_reason: str | None) -> str | None:
+def _empty_reason(text: str, reasoning_tokens: int, finish_reason: str | None,
+                  frames_seen: int = -1, frames_unparsed: int = 0) -> str | None:
     """Explain an empty answer instead of letting it pass as a real one.
 
     The common case on a reasoning model is a token budget consumed entirely by
@@ -70,6 +71,21 @@ def _empty_reason(text: str, reasoning_tokens: int, finish_reason: str | None) -
     """
     if text:
         return None
+    # Distinguish a CLIENT-side stream-parsing failure from a model that said
+    # nothing. Silently skipping malformed frames and then reporting "model
+    # returned no content" blames the backend for our own inability to read
+    # its output — which sends debugging in exactly the wrong direction.
+    if frames_seen == 0:
+        return ("no stream frames received from the backend — the request "
+                "returned an empty body")
+    if frames_unparsed and frames_unparsed == frames_seen:
+        return (f"could not parse ANY of the {frames_seen} stream frames the "
+                "backend sent — this is a client-side parsing failure, not a "
+                "model failure; the backend's stream format may have changed")
+    if frames_unparsed:
+        return (f"{frames_unparsed} of {frames_seen} stream frames were "
+                "unparseable and no answer content was recovered — suspect a "
+                "client/backend stream-format mismatch")
     if reasoning_tokens and finish_reason == "length":
         return (f"model produced {reasoning_tokens} reasoning tokens and hit the "
                 "token limit before writing an answer — raise max_answer_tokens "
@@ -141,6 +157,7 @@ class LLMClient:
         ttft = None
         parts: list[str] = []
         ntok = reasoning_tokens = 0
+        frames_seen = frames_unparsed = 0
         finish_reason = None
         try:
             with urllib.request.urlopen(req, timeout=self.cfg.timeout_s) as r:
@@ -148,9 +165,11 @@ class LLMClient:
                     line = raw.decode("utf-8", errors="replace").strip()
                     if not line:
                         continue
+                    frames_seen += 1
                     try:
                         rec = json.loads(line)
                     except json.JSONDecodeError:
+                        frames_unparsed += 1
                         continue
                     if rec.get("error"):
                         raise LLMError(f"Ollama error: {rec['error']}")
@@ -178,11 +197,21 @@ class LLMClient:
         return {"text": text,
                 "ttft_ms": round((ttft or 0) * 1000, 1),
                 "gen_ms": round(gen * 1000, 1),
-                "tokens": ntok,
+                # NOTE: these count STREAM DELTAS, not tokens. A delta usually
+                # carries one token but the backend makes no such guarantee, so
+                # the derived rate is reported as deltas/sec under an honest
+                # name rather than as tokens/sec.
+                "content_deltas": ntok,
+                "tokens": ntok,               # retained for compatibility
+                "reasoning_deltas": reasoning_tokens,
                 "reasoning_tokens": reasoning_tokens,
                 "finish_reason": finish_reason,
                 "total_ms": round(total * 1000, 1),
-                "empty_reason": _empty_reason(text, reasoning_tokens, finish_reason),
+                "frames_seen": frames_seen,
+                "frames_unparsed": frames_unparsed,
+                "empty_reason": _empty_reason(text, reasoning_tokens, finish_reason,
+                                              frames_seen, frames_unparsed),
+                "deltas_per_s": round(ntok / gen, 1) if gen > 0.05 and ntok else None,
                 "tokens_per_s": round(ntok / gen, 1) if gen > 0.05 and ntok else None}
 
     # ------------------------------------------------------------ OpenAI-compatible
@@ -207,6 +236,7 @@ class LLMClient:
         ttft = None
         parts: list[str] = []
         ntok = 0
+        frames_seen = frames_unparsed = 0
         # F-V3-09: reasoning models (Qwen3.x) stream their chain-of-thought in a
         # SEPARATE field and emit `content` only afterwards. Counting only
         # `content` made a model that spent its whole token budget thinking look
@@ -224,9 +254,11 @@ class LLMClient:
                     payload = line[5:].strip()
                     if payload == "[DONE]":
                         break
+                    frames_seen += 1
                     try:
                         choice = json.loads(payload)["choices"][0]
                     except (json.JSONDecodeError, KeyError, IndexError):
+                        frames_unparsed += 1
                         continue
                     if choice.get("finish_reason"):
                         finish_reason = choice["finish_reason"]
@@ -254,11 +286,21 @@ class LLMClient:
         return {"text": text,
                 "ttft_ms": round((ttft or 0) * 1000, 1),
                 "gen_ms": round(gen * 1000, 1),
-                "tokens": ntok,
+                # NOTE: these count STREAM DELTAS, not tokens. A delta usually
+                # carries one token but the backend makes no such guarantee, so
+                # the derived rate is reported as deltas/sec under an honest
+                # name rather than as tokens/sec.
+                "content_deltas": ntok,
+                "tokens": ntok,               # retained for compatibility
+                "reasoning_deltas": reasoning_tokens,
                 "reasoning_tokens": reasoning_tokens,
                 "finish_reason": finish_reason,
                 "total_ms": round(total * 1000, 1),
-                "empty_reason": _empty_reason(text, reasoning_tokens, finish_reason),
+                "frames_seen": frames_seen,
+                "frames_unparsed": frames_unparsed,
+                "empty_reason": _empty_reason(text, reasoning_tokens, finish_reason,
+                                              frames_seen, frames_unparsed),
+                "deltas_per_s": round(ntok / gen, 1) if gen > 0.05 and ntok else None,
                 "tokens_per_s": round(ntok / gen, 1) if gen > 0.05 and ntok else None}
 
     def health(self) -> bool:
