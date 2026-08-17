@@ -34,6 +34,27 @@ category lacking evidence.
 Inventory pilot (first 20,000 files): 173 s, 2,966 exact duplicates tagged,
 76 revision families linked, 0 errors. Full inventory therefore ≈ 95 min.
 
+### Corpus as actually inventoried (2026-08-17, after scoping + re-inference)
+
+| project | files |
+|---|---|
+| SITE CONCEPT INTERNATIONAL | 25,042 |
+| AI MAIN MEMORY | 15,431 |
+| AI | 5,172 |
+
+Knowledge: 5,140 `.md`, 4,267 `.json`, **4,170 `.pdf`**, 716 `.txt`,
+322 `.xlsx`, 308 `.docx`, 83 `.pptx`. CAD: **4,228 `.dwg`**, 14 `.dxf`.
+
+Document types after the F-V3-04 fix and `--reinfer`: DRAWING 332,
+SPECIFICATION 226, BQ 146, CORRESPONDENCE 124, TENDER 116, PAYMENT 102,
+CPC 101, CLAIM 93, SUBMISSION 81, MEMO 66, LAI 62, REPORT 58, EMAIL 52,
+PHOTO 34, CONTRACT 34, VO 33, RFI 26, QUOTATION 24, CHECKLIST 13,
+MINUTES 12, METHOD_STATEMENT 5, INVOICE 4, CATALOGUE 4, UNKNOWN 43,897.
+
+The 4,228 `.dwg` files are the largest untapped source: DWG cannot be parsed
+directly (§24) and needs a read-only export path to DXF/PDF before its content
+is searchable. Only 14 `.dxf` exist today.
+
 ## Model decision
 
 The brief's `Qwen3.8-27B` **does exist** as Ollama `qwen3.8:27b` (18 GB, 256K

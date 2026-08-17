@@ -72,6 +72,12 @@ additionally require non-letter neighbours, and document type is matched
 against the FILENAME only (a parent folder describes the project, not this
 file's type); discipline still may come from folders. RESULT: four regression
 tests in `test_regressions.py`, all green.
+
+**VERIFIED ON REAL DATA (2026-08-17):** after `inventory --reinfer` over 45,645
+manifest rows, `MEMO` fell from 13,647 to **66** and `VO` from 141 to **33**,
+while genuine types resolved sensibly (SPECIFICATION 226, BQ 146,
+CORRESPONDENCE 124, TENDER 116, PAYMENT 102, CPC 101, CLAIM 93, SUBMISSION 81,
+LAI 62, RFI 26). 23,199 rows corrected in 1.8 s.
 LESSON: substring matching over paths silently manufactures metadata at scale.
 
 **F-V3-05 / 2026-08-17 / Phase 0 inspector / reported "Qwen3.8-27B does not
@@ -114,6 +120,11 @@ MEMORY`. Ingestion then processes in discovery order, inheriting the same bias.
 FIX: `inventory --root` scopes the walk; `ingest --project/--path` scopes
 processing. RESULT: `test_scan_can_be_scoped_to_one_root`,
 `test_ingest_can_be_scoped_by_path`.
+
+**VERIFIED ON REAL DATA (2026-08-17):** scoping the scan to
+`E:\SITE CONCEPT INTERNATIONAL` surfaced the actual working corpus —
+25,042 files under that project, real PDFs rising from 64 to **4,170** and
+drawings from 1,148 to **4,228** `.dwg`.
 LESSON: a capped pass over a large drive samples the alphabet, not the corpus.
 
 **F-V3-08 / 2026-08-17 / inventory / a metadata fix could not reach existing
@@ -122,5 +133,6 @@ files. ROOT CAUSE: `scan()` skips files whose path+size+mtime are unchanged, so
 corrected inference rules never touched the rows they had mislabelled — the bad
 metadata was effectively frozen. FIX: `inventory --reinfer` re-applies the rules
 to manifest rows without re-hashing, and rebuilds revision links. RESULT:
-`test_reinfer_updates_existing_rows_without_rehash`.
+`test_reinfer_updates_existing_rows_without_rehash`, plus a verified real run:
+45,645 rows examined, 23,199 updated, 369 revision links rebuilt, 1.8 s.
 LESSON: incremental-by-content means rule changes need their own migration path.
