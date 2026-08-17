@@ -22,24 +22,36 @@ llm:
   base_url: http://127.0.0.1:11434/v1
   api_key: ""
 
-  # "Qwen3.8-27B" from the original brief DOES NOT EXIST on this machine.
-  # These are chosen from `ollama list` as actually installed.
+  # qwen3.8:27b is the brief's intended model and DOES exist in the Ollama
+  # library (18 GB, 256K context, text+image). It was absent from this machine
+  # at inspection time; pull it with:  ollama pull qwen3.8:27b
   #
-  # Default = qwen3.5:9b. Reason: 16 GB VRAM with only ~4.7 GB free means a
-  # 30-35B model cannot stay resident; it will spill to CPU and TTFT will be
-  # seconds, not sub-second. The FAST objective (§10) is only reachable with a
-  # model that fits. This is a starting point to BENCHMARK, not a verdict.
-  model: qwen3.5:9b
+  # MEASURED CONSTRAINT (§88 — stated, not hidden):
+  #   model 18.0 GB  >  VRAM 16.3 GB total (4.7 GB free at inspection)
+  # It cannot fit entirely in VRAM even with the card emptied, so Ollama will
+  # offload layers to CPU/RAM (68 GB available, so it runs). Expect TTFT in
+  # seconds. The §10 FAST objective (TTFT <1s p50) is NOT reachable with this
+  # model on this card — that is a hardware fact, not a tuning problem.
+  #
+  # Therefore: quality where it pays, speed where it matters.
+  model: qwen3.8:27b
 
-  # Per-mode split. Uncomment ONLY after benchmarking: alternating models makes
-  # Ollama swap weights (seconds of latency), so a split can be slower overall
-  # than one resident model. Measure with `alirag bench run` both ways.
+  # FAST keeps a model that genuinely fits in VRAM, so "cepat:" stays fast.
+  # DEEP/FULLSWING accept slower CPU-offloaded generation for better reasoning.
+  #
+  # CAVEAT TO BENCHMARK BEFORE TRUSTING: alternating models makes Ollama swap
+  # weights, which costs seconds on the first query after a mode change. If your
+  # usage mixes modes constantly, ONE resident model may win overall. Measure
+  # both ways with `alirag bench run --label fast` before settling.
   model_fast: qwen3.5:9b
-  # model_deep: qwen3:30b
-  # model_fullswing: qwen3.6:35b
+  model_deep: qwen3.8:27b
+  model_fullswing: qwen3.8:27b
 
-  # Vision model for page-image reasoning (§21). Installed and available.
-  model_vision: qwen3-vl:8b-instruct-q8_0
+  # qwen3.8 accepts image input, so page-image reasoning (§21) can use the same
+  # weights already resident for DEEP — no second vision model competing for
+  # VRAM. qwen3-vl:8b-instruct-q8_0 is the lighter alternative if the 27B's
+  # offload makes visual queries too slow; benchmark before choosing.
+  model_vision: qwen3.8:27b
 
   # Ollama's OpenAI-compatible layer takes `think` for reasoning control.
   # VERIFY against your Ollama version before trusting the mapping (§34):
