@@ -25,28 +25,46 @@ from .safety import SafetyGuard
 REV_RE = re.compile(r"(?:^|[\s_\-\(\[])(?:REV\.?\s*([A-Z]?\d{1,2}[A-Z]?)|R(\d{1,2}[A-Z]?))(?:$|[\s_\-\)\].])",
                     re.IGNORECASE)
 
-# document-type hints from filename/path tokens (conservative, additive)
-DOCTYPE_HINTS = [
-    ("tender", "TENDER"), ("bq", "BQ"), ("bill of quantit", "BQ"),
+# Document-type hints, matched on WORD BOUNDARIES.
+#
+# F-V3-04 (2026-08-17, first real E:\ run): plain substring matching produced
+# 13,651 false "MEMO" hits because the folder "AI MAIN MEMORY" contains "memo",
+# and short tokens like "vo"/"bq"/"lai" matched inside unrelated words ("lain"
+# is a common Malay word). Metadata must never be invented (§4), so every hint
+# is now a \b-anchored regex and abbreviations additionally require a
+# non-letter neighbour, e.g. "LAI-003" or "VO 12" but not "lain"/"volume".
+def _hint_re(token: str) -> "re.Pattern":
+    esc = re.escape(token)
+    if len(token) <= 3 and token.isalpha():
+        # abbreviation: must stand alone or be followed by a separator+digit
+        return re.compile(rf"(?<![a-z]){esc}(?![a-z])", re.IGNORECASE)
+    return re.compile(rf"\b{esc}", re.IGNORECASE)
+
+
+DOCTYPE_HINTS = [(_hint_re(t), v) for t, v in [
+    ("tender", "TENDER"), ("bill of quantit", "BQ"), ("bq", "BQ"),
     ("contract", "CONTRACT"), ("agreement", "CONTRACT"),
-    ("spec", "SPECIFICATION"), ("drawing", "DRAWING"), ("dwg", "DRAWING"),
+    ("specification", "SPECIFICATION"), ("spec", "SPECIFICATION"),
+    ("drawing", "DRAWING"), ("dwg", "DRAWING"),
     ("ncr", "NCR"), ("lai", "LAI"), ("rfi", "RFI"), ("vo", "VO"),
     ("claim", "CLAIM"), ("invoice", "INVOICE"), ("payment", "PAYMENT"),
     ("submission", "SUBMISSION"), ("submittal", "SUBMISSION"),
     ("memo", "MEMO"), ("minutes", "MINUTES"), ("mom", "MINUTES"),
-    ("letter", "CORRESPONDENCE"), ("email", "EMAIL"), ("correspondence", "CORRESPONDENCE"),
+    ("letter", "CORRESPONDENCE"), ("email", "EMAIL"),
+    ("correspondence", "CORRESPONDENCE"),
     ("method statement", "METHOD_STATEMENT"), ("catalogue", "CATALOGUE"),
     ("cpc", "CPC"), ("checklist", "CHECKLIST"), ("report", "REPORT"),
-    ("photo", "PHOTO"), ("quotation", "QUOTATION"), ("po ", "PURCHASE_ORDER"),
-]
+    ("photo", "PHOTO"), ("quotation", "QUOTATION"),
+    ("purchase order", "PURCHASE_ORDER"),
+]]
 
-DISCIPLINE_HINTS = [
+DISCIPLINE_HINTS = [(_hint_re(t), v) for t, v in [
     ("landscape", "LANDSCAPE"), ("softscape", "LANDSCAPE"), ("hardscape", "LANDSCAPE"),
     ("irrigation", "IRRIGATION"), ("arbor", "ARBORICULTURE"),
     ("civil", "CIVIL"), ("structural", "STRUCTURAL"), ("architect", "ARCHITECTURE"),
     ("m&e", "MEP"), ("mep", "MEP"), ("electrical", "MEP"), ("plumbing", "MEP"),
     ("survey", "SURVEY"), ("interior", "INTERIOR"),
-]
+]]
 
 
 def classify_ext(ext: str, cfg: Config) -> str:
@@ -90,17 +108,20 @@ def infer_metadata(path: str, source_root: str) -> dict:
     evidence stays UNKNOWN."""
     rel = os.path.relpath(path, source_root)
     parts = Path(rel).parts
-    lower = path.lower()
     meta = {"project": UNKNOWN, "document_type": UNKNOWN,
             "discipline": UNKNOWN, "revision": UNKNOWN}
     if len(parts) > 1 and not parts[0].startswith(("$", ".")):
         meta["project"] = parts[0]
-    for token, dtype in DOCTYPE_HINTS:
-        if token in lower:
+    # Match document type on the FILENAME first: a folder name higher up the
+    # tree describes the project, not this file's type, and letting it decide
+    # is how "AI MAIN MEMORY" mislabelled 13k files as MEMO (F-V3-04).
+    stem = Path(path).stem
+    for rx, dtype in DOCTYPE_HINTS:
+        if rx.search(stem):
             meta["document_type"] = dtype
             break
-    for token, disc in DISCIPLINE_HINTS:
-        if token in lower:
+    for rx, disc in DISCIPLINE_HINTS:
+        if rx.search(rel):          # discipline may legitimately come from folders
             meta["discipline"] = disc
             break
     m = REV_RE.search(Path(path).stem)
@@ -261,4 +282,15 @@ def organization_report(mf: Manifest) -> dict:
             "SELECT COUNT(*) FROM files WHERE source_type='unsupported'").fetchone()[0],
         "unknown_project": con.execute(
             "SELECT COUNT(*) FROM files WHERE project='UNKNOWN'").fetchone()[0],
+        # What the unsupported/garbage buckets actually contain, so exclusion
+        # rules can be reviewed against reality before production indexing (§64).
+        "unsupported_extensions": {r[0] or "(none)": r[1] for r in con.execute(
+            "SELECT extension, COUNT(*) FROM files WHERE source_type='unsupported' "
+            "GROUP BY extension ORDER BY 2 DESC LIMIT 25")},
+        "knowledge_extensions": {r[0]: r[1] for r in con.execute(
+            "SELECT extension, COUNT(*) FROM files WHERE source_type='knowledge' "
+            "GROUP BY extension ORDER BY 2 DESC")},
+        "cad_extensions": {r[0]: r[1] for r in con.execute(
+            "SELECT extension, COUNT(*) FROM files WHERE source_type='cad' "
+            "GROUP BY extension ORDER BY 2 DESC")},
     }

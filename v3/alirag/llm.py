@@ -49,7 +49,7 @@ class LLMClient:
     def chat(self, system: str, user: str, mode: str = "FAST") -> dict:
         """Returns {text, ttft_ms, gen_ms, tokens, tokens_per_s}."""
         body = {
-            "model": self.cfg.model,
+            "model": self.cfg.model_for(mode),
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
             "max_tokens": self.max_tokens.get(mode, 800),

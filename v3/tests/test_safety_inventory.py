@@ -45,12 +45,19 @@ def test_snapshot_verify_detects_tamper(cfg, corpus, tmp_path):
     snap.parent.mkdir(parents=True, exist_ok=True)
     guard.snapshot(snap)
     clean = guard.verify_snapshot(snap)
-    assert clean["pass"] and not clean["deleted"] and not clean["modified"]
-    # simulate an external modification -> verify must flag it
+    assert clean["pass"] and clean["pass_strict"]
+    assert not clean["deleted"] and not clean["modified"]
+    # A modification by some OTHER process must be surfaced, but attributed
+    # correctly: it fails the strict view, not the §84 "did the RAG harm an
+    # original?" view (F-V3-03).
     victim = corpus / "Meridian" / "Specs" / "Landscape Spec.txt"
     victim.write_text("tampered", encoding="utf-8")
     dirty = guard.verify_snapshot(snap)
-    assert not dirty["pass"] and str(victim) in dirty["modified"]
+    assert str(victim) in dirty["modified"]
+    assert str(victim) in dirty["external_modified"]
+    assert not dirty["pass_strict"], "strict view must flag any change"
+    assert dirty["pass"], "not attributable to the RAG: no audited write"
+    assert dirty["rag_modified"] == []
 
 
 def test_inventory_classification_and_metadata(ingested):

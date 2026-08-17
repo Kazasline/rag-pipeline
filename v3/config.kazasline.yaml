@@ -1,0 +1,107 @@
+# ALI RAG V3 — configuration derived from the REAL Phase 0 inspection
+# of this machine on 2026-08-17 (report: E:\ALI_RAG\17_REPORTS\phase0_machine_1786940475.json).
+#
+# Measured facts this config responds to:
+#   CPU    Intel 20-core            RAM  68.3 GB
+#   GPU    RTX 5080, 16.3 GB VRAM   — only 4.7 GB FREE at inspection time
+#   CUDA   13.3                     driver 591.86
+#   E:\    1024 GB total, 281 GB free, 662,244 files
+#   Serving: Ollama ONLY (LM Studio / llama.cpp / vLLM / SGLang absent)
+#   Qdrant:  not running  -> memmap dense backend (auto-selected)
+#   torch/docling: NOT installed  -> PyMuPDF text path, no GPU Docling
+#
+# Install to:  E:\ALI_RAG\01_CONFIG\config.yaml
+
+workspace: E:\ALI_RAG
+source_roots:
+  - E:\
+
+llm:
+  # Ollama exposes an OpenAI-compatible API at /v1 — this is the only live
+  # endpoint on the machine, so it is what we use.
+  base_url: http://127.0.0.1:11434/v1
+  api_key: ""
+
+  # "Qwen3.8-27B" from the original brief DOES NOT EXIST on this machine.
+  # These are chosen from `ollama list` as actually installed.
+  #
+  # Default = qwen3.5:9b. Reason: 16 GB VRAM with only ~4.7 GB free means a
+  # 30-35B model cannot stay resident; it will spill to CPU and TTFT will be
+  # seconds, not sub-second. The FAST objective (§10) is only reachable with a
+  # model that fits. This is a starting point to BENCHMARK, not a verdict.
+  model: qwen3.5:9b
+
+  # Per-mode split. Uncomment ONLY after benchmarking: alternating models makes
+  # Ollama swap weights (seconds of latency), so a split can be slower overall
+  # than one resident model. Measure with `alirag bench run` both ways.
+  model_fast: qwen3.5:9b
+  # model_deep: qwen3:30b
+  # model_fullswing: qwen3.6:35b
+
+  # Vision model for page-image reasoning (§21). Installed and available.
+  model_vision: qwen3-vl:8b-instruct-q8_0
+
+  # Ollama's OpenAI-compatible layer takes `think` for reasoning control.
+  # VERIFY against your Ollama version before trusting the mapping (§34):
+  #   ollama --version   and  https://docs.ollama.com/api
+  # If your build rejects it, set this to "none" — modes still work, they just
+  # stop toggling the thinking budget.
+  reasoning_param_style: ollama_think
+
+  timeout_s: 300
+  max_answer_tokens_fast: 400
+  max_answer_tokens_deep: 1200
+  max_answer_tokens_fullswing: 3000
+
+embed:
+  # bge-m3:latest is confirmed installed. 1024-dim, multilingual EN+MS —
+  # the V1-proven choice on this exact corpus.
+  provider: ollama
+  base_url: http://127.0.0.1:11434
+  model: bge-m3
+  dim: 1024
+  timeout_s: 600
+
+dense:
+  # Qdrant is not running; "auto" falls back to the memmap backend, which is
+  # restart-safe and needs no service. If you later start Qdrant, this same
+  # setting will pick it up automatically — check /status to see which is live.
+  backend: auto
+  qdrant_url: http://127.0.0.1:6333
+  qdrant_collection: alirag_chunks
+
+ingest:
+  ocr_lang: eng+msa
+  chunk_chars: 1800
+  chunk_overlap: 360
+  page_image_max_px: 1600
+
+  # Exclusions tuned to what the pilot inventory actually found on E:\.
+  # These are AI infrastructure and live-service directories, not knowledge
+  # (§64/§65) — they are still inventoried, just not indexed as documents.
+  exclude_dirs:
+    - $recycle.bin
+    - system volume information
+    - node_modules
+    - .git
+    - __pycache__
+    - .venv
+    - venv
+    - appdata
+    - windows
+    - program files
+    - program files (x86)
+    - programdata
+    - .cache
+    - site-packages
+    - ali_rag
+    # --- machine-specific, from the pilot scan ---
+    - hermes            # live cron/gateway service (writes heartbeats)
+    - sci_ai_library    # AI runtime + logs, not project documents
+    - models
+    - checkpoints
+    - .ollama
+
+api:
+  host: 127.0.0.1
+  port: 8642

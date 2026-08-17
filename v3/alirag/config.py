@@ -91,6 +91,22 @@ class LLMConfig:
     # "qwen_enable_thinking" (chat_template_kwargs.enable_thinking),
     # "ollama_think" (think: bool)
     reasoning_param_style: str = "none"
+    # Optional per-mode model override. Justified by measured hardware, not
+    # preference: on a 16GB card a 30B+ model cannot stay resident alongside
+    # anything else, so FAST may need a smaller resident model while DEEP /
+    # FULLSWING accept slower CPU-offloaded generation for better reasoning
+    # (§34/§35/§88). Empty = use `model` for every mode. Note that alternating
+    # between two models makes the server swap weights, which costs seconds —
+    # only split after benchmarking both ways.
+    model_fast: str = ""
+    model_deep: str = ""
+    model_fullswing: str = ""
+    # Vision model for page-image reasoning (§21); empty = vision disabled.
+    model_vision: str = ""
+
+    def model_for(self, mode: str) -> str:
+        return {"FAST": self.model_fast, "DEEP": self.model_deep,
+                "FULLSWING": self.model_fullswing}.get(mode) or self.model
 
 
 @dataclass

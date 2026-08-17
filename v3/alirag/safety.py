@@ -115,10 +115,48 @@ class SafetyGuard:
                             return n
         return n
 
+    def written_paths(self) -> set:
+        """Every path this system has ever written, from the audit journal.
+
+        guarded_write_path() is the only write route in the package and it
+        always journals, so this set is the complete record of RAG-attributable
+        writes — which is what makes attribution in verify_snapshot() evidence
+        based rather than a guess.
+        """
+        out: set = set()
+        path = self.workspace / "16_LOGS" / "safety_audit.jsonl"
+        if not path.exists():
+            return out
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if rec.get("action", "").endswith("write"):
+                        out.add(rec.get("path", ""))
+        except OSError:
+            pass
+        return out
+
     def verify_snapshot(self, snap_path: str | os.PathLike) -> dict:
-        """Re-scan and compare against a snapshot. Any deletion/modification of
-        an original is a hard FAIL. New files are informational (originals may
-        legitimately be added by the user)."""
+        """Re-scan and compare against a snapshot, and ATTRIBUTE every change.
+
+        F-V3-03 (2026-08-17, first real E:\\ run): the original version reported
+        a bare pass/fail on "did anything change", which returned pass:false
+        because the user's own live services (cron heartbeats, keep-warm locks,
+        bridge logs) rewrote their own files during the 173-second scan. That is
+        a false positive: it says nothing about whether the RAG touched a
+        document.
+
+        The check now separates:
+          * rag_modified  — changed AND present in our write audit  -> real breach
+          * external_modified — changed but never written by us     -> other process
+        `pass` (the §84 acceptance criterion) is based on rag_modified/deleted,
+        while `pass_strict` preserves the old "nothing changed at all" answer so
+        nothing is hidden. Both are reported.
+        """
         before = {}
         with open(snap_path, encoding="utf-8") as f:
             for line in f:
@@ -144,12 +182,32 @@ class SafetyGuard:
                             modified.append(p)
         deleted = [p for p in before if p not in seen]
         added = len(seen) - len(before) + len(deleted)
+
+        ours = self.written_paths()
+        rag_modified = [p for p in modified if p in ours]
+        external_modified = [p for p in modified if p not in ours]
+        rag_deleted = [p for p in deleted if p in ours]
+
         result = {
             "files_before": len(before),
             "files_after": len(seen),
+            "added_count": max(0, added),
+            # §84 acceptance: did the RAG harm an original?
+            "pass": not rag_deleted and not rag_modified,
+            "rag_modified": rag_modified,
+            "rag_deleted": rag_deleted,
+            # strict view: did ANYTHING under the source roots change?
+            "pass_strict": not deleted and not modified,
+            "external_modified": external_modified,
+            "external_modified_count": len(external_modified),
             "deleted": deleted,
             "modified": modified,
-            "added_count": max(0, added),
-            "pass": not deleted and not modified,
+            "note": ("'pass' answers the §84 question (did the RAG modify or "
+                     "delete an original?) by cross-referencing the write audit "
+                     "log. 'external_modified' are files changed by other "
+                     "processes during the scan — typically your own running "
+                     "services writing their logs/locks/heartbeats. Review that "
+                     "list: every entry should be a file you expect a live "
+                     "service to write."),
         }
         return result
