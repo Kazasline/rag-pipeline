@@ -334,7 +334,13 @@ def _source_line(h: dict) -> dict:
             # /source/{file_id} exists but the citation did not carry the id
             "file_id": h.get("file_id"), "chunk_id": h.get("chunk_id"),
             "page": h.get("page"),
-            "revision": h.get("revision"), "project": h.get("project"),
+            "revision": h.get("revision"),
+            "project": h.get("project"),
+            # HOW the project was determined (§4). Round-4 reviewer N4-9: the
+            # column was recorded and documented as letting the reader tell a
+            # folder-derived guess from a confirmed attribution, but nothing
+            # ever read it, so citations presented the guess as fact.
+            "project_source": h.get("project_source"),
             "path": h.get("path"),
             "superseded": bool(h.get("superseded_by")),
             "retrievers": h.get("sources", [])}

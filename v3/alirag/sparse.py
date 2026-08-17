@@ -57,6 +57,37 @@ def normalize_id(tok: str) -> str:
     return re.sub(r"[-_/.]", "", tok).upper()
 
 
+def code_variants(text: str, limit: int = 60) -> set:
+    """Normalized codes in *text*, INCLUDING contiguous sub-sequences of
+    separator-joined parts.
+
+    `harvest_ids` is greedy across hyphen runs, so "L-201-RevB" yields the
+    single token `L201REVB` and an equality test against the query's `L201`
+    fails. Round-4 reviewer N4-3: `find L-201` returned INSUFFICIENT while
+    `L-201-RevB.pdf` sat in the nearest-match list — and revision-suffixed and
+    prefix-qualified sheet names ("DWG-L-201-R03", "Dawson-L-201-planting")
+    are the norm in this corpus, so the §9 exact path was broken for most real
+    drawing filenames.
+
+    Splitting into parts and re-joining windows recovers the identifier
+    wherever it sits inside a longer name.
+    """
+    out: set = set()
+    for raw in harvest_ids(text, limit=limit):
+        out.add(normalize_id(raw))
+        parts = [p for p in re.split(r"[-_/.]", raw) if p]
+        if len(parts) < 2:
+            continue
+        parts = parts[:8]                     # bound the window count
+        for i in range(len(parts)):
+            for j in range(i + 1, len(parts) + 1):
+                window = "".join(parts[i:j]).upper()
+                # a single bare part is not an identifier on its own
+                if j - i > 1 or len(window) >= 4:
+                    out.add(window)
+    return out
+
+
 def harvest_ids(text: str, limit: int = 200) -> list[str]:
     out, seen = [], set()
     for m in ID_RE.finditer(text):

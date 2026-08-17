@@ -93,43 +93,59 @@ _DOCUMENT_EXTS = (
 )
 
 
-def _reject_overbroad_pattern(pat: str) -> None:
-    r"""Refuse declarations that would excuse changes to documents.
+def _reject_overbroad_pattern(pat: str, excluded_dirs=()) -> None:
+    r"""A volatile declaration must name a directory the operator has ALREADY
+    excluded from indexing.
 
-    Round-3 reviewer R3-7: with `volatile_patterns: ["*"]` a source document
-    could be rewritten and another deleted and `verify_snapshot` still returned
-    `pass: True`. The escape hatch existed so a live service's own logs would
-    not fail the §84 gate; it must not be usable to excuse the corpus it was
-    built to protect.
+    Round-4 reviewer N4-6: the round-3 version refused only bare globs and bare
+    document-extension globs, which was the two literal strings the reviewer
+    had cited rather than the class of defect. A single directory-anchored
+    pattern naming the corpus itself — `*/Dawson/*`, `*/Tender/*`,
+    `*/sources/*` — was accepted, and with it a tender could be rewritten and
+    an instruction deleted while §84 reported `pass: True`.
 
-    A legitimate declaration is DIRECTORY-ANCHORED (`*/hermes/*`) — it names
-    where a service writes. A declaration that is bare, or that reaches
-    document extensions without naming a directory, is refused.
+    The rule is now positive rather than a blocklist: the ONLY paths whose
+    changes may be excused are those inside a directory already declared
+    non-knowledge (`ingest.exclude_dirs`). `*/hermes/*` qualifies because
+    hermes is excluded from indexing; `*/Dawson/*` does not, because Dawson is
+    the corpus. A blocklist has to anticipate every way of naming the corpus;
+    this cannot be widened without the operator also declaring, elsewhere and
+    visibly, that the directory holds nothing worth indexing.
     """
     p = (pat or "").strip().replace("\\", "/")
     if not p:
         raise VolatilePatternRejected("empty volatile pattern")
-    bare = p.strip("*/ ")
-    if not bare:
+    if not p.strip("*/ "):
         raise VolatilePatternRejected(
             f"volatile pattern {pat!r} matches everything. It would excuse any "
             "change to any original file, which is the opposite of what §84 "
-            "verifies. Anchor it to the directory a service writes to, e.g. "
-            "'*/hermes/*'.")
-    has_dir_anchor = "/" in p.strip("*")
-    low = p.lower()
-    if not has_dir_anchor and any(low.endswith(e) or low.endswith("*" + e)
-                                  for e in _DOCUMENT_EXTS):
+            "verifies.")
+    components = {c.strip().lower() for c in p.split("/") if c.strip("* ")}
+    allowed = {d.lower() for d in excluded_dirs}
+    if not allowed:
         raise VolatilePatternRejected(
-            f"volatile pattern {pat!r} matches document files anywhere on the "
-            "drive. Changes to originals are exactly what §84 exists to catch. "
-            "Anchor it to a directory, e.g. '*/hermes/*.log'.")
+            f"volatile pattern {pat!r} cannot be checked: no excluded "
+            "directories are configured, so there is no directory whose "
+            "contents are known not to be documents.")
+    hit = {c.strip("*") for c in components} & allowed
+    if not hit:
+        raise VolatilePatternRejected(
+            f"volatile pattern {pat!r} does not name any directory excluded "
+            f"from indexing (ingest.exclude_dirs). Only a directory the "
+            "operator has already declared non-knowledge may have its changes "
+            "excused; anything else is the corpus §84 exists to protect. "
+            f"Excluded directories include: {sorted(allowed)[:6]}")
 
 
 class SafetyGuard:
-    def __init__(self, source_roots: list[str], workspace: str):
+    def __init__(self, source_roots: list[str], workspace: str,
+                 excluded_dirs=()):
         self.source_roots = [Path(r).resolve() for r in source_roots if r]
         self.workspace = Path(workspace).resolve()
+        # Directories the operator has declared non-knowledge. A volatile
+        # declaration may only point inside one of these (see
+        # _reject_overbroad_pattern).
+        self.excluded_dirs = tuple(excluded_dirs)
         self._audit_path: Path | None = None
         # Path patterns the operator has explicitly declared volatile (live
         # services writing their own logs/locks). Empty by default: a change
@@ -158,7 +174,7 @@ class SafetyGuard:
         reviewer can see what was excused and by whom.
         """
         for pat in patterns:
-            _reject_overbroad_pattern(pat)
+            _reject_overbroad_pattern(pat, self.excluded_dirs)
             if pat not in self.volatile_patterns:
                 self.volatile_patterns.append(pat)
                 self._audit("declare_volatile", pat, "operator declaration")

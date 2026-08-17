@@ -45,11 +45,15 @@ def test_unknown_project_evidence_is_disclosed_not_silently_merged():
 
 
 def test_all_unknown_project_evidence_is_not_supported():
-    """Every citation unattributed used to yield SUPPORTED with no flags."""
+    """Every citation unattributed used to yield SUPPORTED with no flags.
+
+    Updated for round 4: QUERY asks for a claim amount, and D-20's lenient
+    disclosure is withdrawn, so an all-unattributable evidence set for a
+    figure now escalates rather than answering with a footnote (N4-7)."""
     ev = [_ev(chunk_id=1, project="UNKNOWN", filename="a.pdf"),
           _ev(chunk_id=2, project=None, filename="b.pdf")]
     v = verify(ev, query=QUERY)
-    assert v.status == "PARTIAL", v.status
+    assert v.status == "AMBIGUOUS_PROJECT", v.status
     assert any("no known project" in f.lower() for f in v.flags), v.flags
 
 
@@ -173,6 +177,9 @@ def test_volatile_patterns_are_reachable_from_config_and_reported(tmp_path: Path
     cfg = Config(workspace=str(tmp_path / "ALI_RAG"), source_roots=[str(src)],
                  embed=EmbedConfig(provider="hash", dim=256))
     cfg.volatile_patterns = ["*/hermes/*"]
+    # a volatile declaration may only point inside a directory the
+    # operator already excluded from indexing (round-4 N4-6)
+    cfg.ingest.exclude_dirs = tuple(cfg.ingest.exclude_dirs) + ("hermes",)
     cfg_path = cfg.dir("config") / "config.yaml"
     cfg.save(cfg_path)
 
@@ -197,7 +204,8 @@ def test_a_document_change_is_never_excused_by_a_volatile_pattern(tmp_path: Path
     src.mkdir()
     doc = src / "tender.txt"
     doc.write_text("original", encoding="utf-8")
-    guard = SafetyGuard([str(src)], str(tmp_path / "ws"))
+    guard = SafetyGuard([str(src)], str(tmp_path / "ws"),
+                        excluded_dirs=("hermes",))
     guard.allow_volatile(["*/hermes/*"])
     snap = tmp_path / "ws" / "snap.jsonl"
     guard.snapshot(snap)

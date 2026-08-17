@@ -65,6 +65,58 @@ def corpus(tmp_path: Path) -> Path:
     return src
 
 
+# Boilerplate that saturates real construction documents, plus a distinctive
+# subject per file. Used to build a corpus large enough that document-frequency
+# weighting is actually exercised (round-4 reviewer N4-8: the 6-chunk fixture
+# is below MIN_DOCS_FOR_DF, so NO test ever ran the instrument that runs in
+# production, and disabling the DF plumbing entirely left the suite green).
+_BOILER = ("The Contractor shall provide and install the works in accordance "
+           "with the specification and the drawings. Refer to the relevant "
+           "section for general requirements. Locations are shown on the "
+           "drawings for the respective items. ")
+
+
+@pytest.fixture()
+def big_corpus(tmp_path: Path) -> Path:
+    """A corpus above MIN_DOCS_FOR_DF, so the measured-DF path is live."""
+    src = tmp_path / "bigsources" / "Dawson"
+    src.mkdir(parents=True)
+    # Each sheet carries the shared boilerplate plus TWO distinctive tokens, so
+    # a real question can share two discriminating terms while the boilerplate
+    # stays common. A corpus where every document uses the same vocabulary for
+    # its subject has no discriminating terms at all — that is a property of
+    # the corpus, not of the floor.
+    subjects = ["samanea", "zoysia", "podocarpus", "ficus", "bougainvillea",
+                "lagerstroemia", "plumeria", "tabebuia", "cassia", "mimusops"]
+    zones = ["boulevard", "podium", "plaza", "carpark", "riverwalk",
+             "courtyard", "rooftop"]
+    for i in range(260):
+        subject = subjects[i % len(subjects)]
+        zone = zones[i % len(zones)]
+        (src / f"spec_{i:03d}.txt").write_text(
+            f"SPECIFICATION SHEET {i:03d}\n" + _BOILER * 3
+            + f"Planting for the {zone} area uses {subject} at "
+              f"{4 + (i % 5)}m centres, girth {100 + i}mm.\n",
+            encoding="utf-8")
+    return src
+
+
+@pytest.fixture()
+def big_ingested(tmp_path: Path, big_corpus: Path):
+    """(cfg, manifest) over a corpus where doc-frequency weighting applies."""
+    from alirag.ingest import Ingestor
+    c = Config(workspace=str(tmp_path / "BIG_RAG"), source_roots=[str(big_corpus)],
+               embed=EmbedConfig(provider="hash", dim=256))
+    c.dense.backend = "memmap"
+    guard = SafetyGuard(c.source_roots, c.workspace)
+    mf = Manifest(c.manifest_db)
+    scan(c, guard, mf, progress_every=0)
+    ing = Ingestor(c, mf=mf)
+    ing.run()
+    yield c, mf
+    ing.close()
+
+
 @pytest.fixture()
 def cfg(tmp_path: Path, corpus: Path) -> Config:
     c = Config(workspace=str(tmp_path / "ALI_RAG"), source_roots=[str(corpus)],

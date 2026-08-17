@@ -6,22 +6,30 @@ fix pass that followed it._
 ## Where we are
 
 ```
-✅ PHASE 0-15   code built + 179 tests green
+✅ PHASE 0-15   code built + 205 tests green
 ✅ PHASE 0      EXECUTED on the target machine (2026-08-17)
 ✅ PHASE 1      EXECUTED — 20,000-file pilot inventory of E:\
 ✅ PHASE 5-15   installed; 313 files ingested, first grounded answers returned
 ⬜ PHASE 16     benchmark (needs a human-reviewed question set)
-🔄 PHASE 17-19  independent reviewer has run THREE times and FAILED each time
-                (round 1: 3 of 6 categories; round 2: 4 of 6; round 3: 2 of 6,
-                with 2 more conditional). Round-3 fixes are in. Round 4
-                pending — the reviewer, not the builder, decides.
+🔄 PHASE 17-19  independent reviewer has run FOUR times and FAILED each time
+                (round 1: 3 of 6 categories; round 2: 4 of 6; round 3: 2 of 6;
+                round 4: 4 of 6 — three categories REGRESSED, one on a
+                documentation claim that was simply wrong). Round-4 fixes are
+                in. Round 5 pending — the reviewer, not the builder, decides.
 ⬜ PHASE 20     final docs with real numbers
 ```
 
-**Nothing here is signed off.** The builder cannot self-certify (§51). Three
-audits, three FAILs — though round 3 was materially better than round 2: the
-round-2 findings held up under the reviewer's own revert matrix (19 of 22),
-§1 was independently re-verified clean, and DOCUMENTATION_HONESTY passed.
+**Nothing here is signed off.** The builder cannot self-certify (§51). Four
+audits, four FAILs.
+
+Round 4 regressed three categories, and the reason is worth stating plainly:
+two of the round-3 "fixes" were written to the two literal examples the
+reviewer had cited rather than to the class of defect behind them. The
+measured-document-frequency floor REPLACED the boilerplate list instead of
+adding to it, which at production scale was a loosening that restored the very
+hole it was written to close; and the volatile-pattern check refused exactly
+the two strings quoted at it while still accepting a pattern naming the corpus.
+§1 was independently re-verified clean for the third time.
 
 Round 2 also caught this document lying. It previously read "every finding is
 now fixed with a test that fails before the fix" — the reviewer reverted each
@@ -71,6 +79,17 @@ SPECIFICATION 226, BQ 146, CORRESPONDENCE 124, TENDER 116, PAYMENT 102,
 CPC 101, CLAIM 93, SUBMISSION 81, MEMO 66, LAI 62, REPORT 58, EMAIL 52,
 PHOTO 34, CONTRACT 34, VO 33, RFI 26, QUOTATION 24, CHECKLIST 13,
 MINUTES 12, METHOD_STATEMENT 5, INVOICE 4, CATALOGUE 4, UNKNOWN 43,897.
+
+**Read that table carefully: 43,897 is the DOCUMENT_TYPE unknown count.** It is
+not the project unknown count, and it was misquoted as one in DECISIONS.md D-20
+(now withdrawn — see FAILURES.md F-V3-31). The project rows above sum to the
+same 45,645 total, so essentially every file carries a project label and the
+project-unknown share is ≈0%. `alirag status` now reports
+`project_unknown_pct` directly; take it from there, not from this table.
+
+Those project labels are FOLDER NAMES, not verified attributions — "AI MAIN
+MEMORY" is not a project. Citations carry `project_source` so a folder-derived
+guess is legible as one.
 
 The 4,228 `.dwg` files are the largest untapped source: DWG cannot be parsed
 directly (§24) and needs a read-only export path to DXF/PDF before its content

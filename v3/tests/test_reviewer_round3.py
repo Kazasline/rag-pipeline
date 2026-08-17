@@ -148,15 +148,20 @@ def test_generic_domain_words_do_not_clear_the_floor(ingested):
     eng.close()
 
 
-def test_measured_document_frequency_overrides_the_fallback_list():
-    """The real instrument is corpus statistics; the word list is the fallback.
-    A term that is rare in THIS corpus must count even if it looks generic."""
+def test_measurement_can_only_make_the_floor_stricter():
+    """Round-4 reviewer N4-1. Measurement used to REPLACE the boilerplate list
+    above MIN_DOCS_FOR_DF, so on the real index the list was dead code and any
+    boilerplate word whose corpus frequency happened to fall below the ratio
+    was restored as discriminating — re-opening R3-4. The list always applies;
+    DF may only remove terms, never add them back."""
     shared = {"drawing", "samanea"}
-    # fallback: "drawing" is boilerplate by the list
+    # fallback alone: "drawing" is boilerplate
     assert discriminative_terms(shared) == {"samanea"}
-    # measured: "drawing" is rare here, so it discriminates after all
-    df = {"drawing": 5, "samanea": 400}
-    assert discriminative_terms(shared, df, 1000) == {"drawing"}
+    # measured, and "drawing" is RARE here — it still must not come back
+    assert discriminative_terms(shared, {"drawing": 5, "samanea": 40}, 1000) \
+        == {"samanea"}
+    # measurement removing a term the list did not catch is the allowed direction
+    assert discriminative_terms({"samanea"}, {"samanea": 900}, 1000) == set()
 
 
 def test_document_frequency_is_ignored_when_the_corpus_is_too_small():
@@ -198,7 +203,7 @@ def test_snapshot_without_hashes_reports_hashed_false(tmp_path: Path):
     src = tmp_path / "src"
     src.mkdir()
     (src / "a.txt").write_text("x", encoding="utf-8")
-    guard = SafetyGuard([str(src)], str(tmp_path / "ws"))
+    guard = SafetyGuard([str(src)], str(tmp_path / "ws"), excluded_dirs=("hermes", "sci_ai_library", "svc", "logs"))
     snap = tmp_path / "ws" / "snap.jsonl"
     guard.snapshot(snap, hash_files=False)
     assert guard.verify_snapshot(snap)["hashed"] is False
@@ -260,13 +265,13 @@ def test_overbroad_volatile_patterns_are_refused(pat):
     """R3-7: with `volatile_patterns: ["*"]` a source document was rewritten
     and another deleted, and verify_snapshot still returned pass:True. The
     escape hatch must not be usable against the corpus it protects."""
-    guard = SafetyGuard(["/tmp/does-not-matter"], "/tmp/ws")
+    guard = SafetyGuard(["/tmp/does-not-matter"], "/tmp/ws", excluded_dirs=("hermes", "sci_ai_library", "svc", "logs"))
     with pytest.raises(VolatilePatternRejected):
         guard.allow_volatile([pat])
 
 
 def test_directory_anchored_patterns_are_still_accepted():
-    guard = SafetyGuard(["/tmp/does-not-matter"], "/tmp/ws")
+    guard = SafetyGuard(["/tmp/does-not-matter"], "/tmp/ws", excluded_dirs=("hermes", "sci_ai_library", "svc", "logs"))
     guard.allow_volatile(["*/hermes/*", "*/sci_ai_library/*", "*/logs/*.log"])
     assert len(guard.volatile_patterns) == 3
 
@@ -278,7 +283,7 @@ def test_excused_run_is_distinguishable_from_a_clean_one(tmp_path: Path):
     (src / "hermes").mkdir(parents=True)
     (src / "tender.txt").write_text("original", encoding="utf-8")
     (src / "hermes" / "beat.log").write_text("tick", encoding="utf-8")
-    guard = SafetyGuard([str(src)], str(tmp_path / "ws"))
+    guard = SafetyGuard([str(src)], str(tmp_path / "ws"), excluded_dirs=("hermes", "sci_ai_library", "svc", "logs"))
     guard.allow_volatile(["*/hermes/*"])
     snap = tmp_path / "ws" / "snap.jsonl"
     guard.snapshot(snap)
@@ -348,15 +353,30 @@ def test_sensitive_questions_escalate_unattributed_evidence():
     assert "UNKNOWN" in v.by_project, v.by_project
 
 
-def test_non_sensitive_questions_only_disclose():
-    """The escalation must stay narrow, or D-20's whole argument collapses."""
+def test_unattributed_evidence_is_never_merged_with_a_named_project():
+    """D-20 WITHDRAWN (round-4 N4-2): its justifying figure was the
+    document_type UNKNOWN count, not project. The true unattributed share is
+    ~0%, so the strict rule the round-2 reviewer ordered costs almost nothing
+    and applies to every question, sensitive or not."""
     ev = [_ev(1, "Samanea saman rain trees along the boulevard planting.",
               "spec.pdf", project="Dawson"),
           _ev(2, "Samanea saman rain trees at the entrance plaza.",
               "scan_0422.pdf", project="UNKNOWN")]
     v = verify(ev, query="where are the samanea rain trees planted?")
-    assert v.status == "PARTIAL", (v.status, v.flags)
+    assert v.status == "AMBIGUOUS_PROJECT", (v.status, v.flags)
     assert any("no known project" in f.lower() for f in v.flags)
+    assert "UNKNOWN" in v.by_project
+
+
+def test_fully_attributed_evidence_still_answers_normally():
+    """The strict rule must not make ordinary answers impossible — in this
+    corpus essentially every file carries a project label."""
+    ev = [_ev(1, "Samanea saman rain trees along the boulevard planting.",
+              "spec.pdf", project="Dawson"),
+          _ev(2, "Samanea saman rain trees at the entrance plaza.",
+              "spec2.pdf", project="Dawson")]
+    v = verify(ev, query="where are the samanea rain trees planted?")
+    assert v.status == "SUPPORTED", (v.status, v.flags)
 
 
 def test_status_reports_the_unknown_project_share(ingested):

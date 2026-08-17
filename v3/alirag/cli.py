@@ -204,7 +204,8 @@ def main(argv: list[str] | None = None):
         return
 
     if args.cmd == "safety":
-        guard = SafetyGuard(cfg.source_roots, cfg.workspace)
+        guard = SafetyGuard(cfg.source_roots, cfg.workspace,
+                            excluded_dirs=cfg.ingest.exclude_dirs)
         # Operator-declared volatile patterns, from config.yaml. Applied to
         # BOTH snapshot and verify so the declaration in force is recorded on
         # the artifact itself and the reviewer can rule on the excuse.

@@ -182,7 +182,8 @@ class Manifest:
 
     def chunk(self, chunk_id: int):
         return self.con.execute(
-            "SELECT c.*, f.original_path, f.filename, f.project, f.revision, "
+            "SELECT c.*, f.original_path, f.filename, f.project, f.project_source, "
+            "f.revision, "
             "f.document_type, f.superseded_by "
             "FROM chunks c JOIN files f ON f.file_id=c.file_id WHERE c.chunk_id=?",
             (chunk_id,)).fetchone()

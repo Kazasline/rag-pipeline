@@ -111,3 +111,37 @@ result when it does.
 Test suite 139 → 179. All 17 round-3 fixes were individually reverted and
 their tests observed to fail; two tests that did not bite on revert were
 rewritten until they did.
+
+
+## 2026-08-17 (round 4) — audit FAIL, three categories regressed
+
+**FAIL, 4 of 6.** DATA_SAFETY, TEST_COVERAGE and DOCUMENTATION_HONESTY all
+regressed from their round-3 results. The cause is uncomfortable and worth
+recording: two round-3 fixes had been written to the two literal examples the
+reviewer cited, not to the class of defect behind them.
+
+* The relevance floor's document-frequency weighting REPLACED the boilerplate
+  list rather than adding to it, so above the 200-chunk threshold the list was
+  dead code and boilerplate words with low measured frequency were restored as
+  discriminating. At production scale that re-opened the exact hole it was
+  written to close. Measurement may now only make the floor stricter.
+* The volatile-pattern check refused bare `*` and bare `*.pdf` — and accepted
+  `*/Dawson/*`. It is now a positive rule: a declaration must name a directory
+  already excluded from indexing. `reviewer.audit` requires `verdict == PASS`.
+* No test ever executed the measured-DF path: the fixture was 6 chunks against
+  a 200-chunk threshold, so disabling the plumbing entirely left the suite
+  green. There is now a 260-document fixture and an end-to-end test, plus a
+  guard test that the fixture stays large enough.
+* DECISIONS.md D-20 is WITHDRAWN. Its justifying figure — "43,897 of ~45,000
+  files carry project=UNKNOWN" — was the document_type unknown count. The true
+  project-unknown share is ≈0%, so the strict rule the round-2 reviewer ordered
+  costs almost nothing, and is now implemented.
+* Document codes match as filename components (`L-201-RevB` was refused);
+  naming a file no longer certifies arbitrary chunks of it; the project label is
+  stripped as a phrase rather than term by term; `wrong_project_rate` excludes
+  unattributed sources instead of scoring them correct; citations carry
+  `project_source`.
+
+See FAILURES.md F-V3-31..36. Test suite 179 → 205; all 13 fixes individually
+reverted and observed red, including two tests that did not bite on the first
+attempt and were rewritten until they did.

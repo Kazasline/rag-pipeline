@@ -58,7 +58,7 @@ def test_verify_attributes_external_writers(tmp_path):
     heartbeat = src / "svc" / "ticker.heartbeat"
     heartbeat.write_text("t0", encoding="utf-8")
 
-    guard = SafetyGuard([str(src)], str(tmp_path / "ws"))
+    guard = SafetyGuard([str(src)], str(tmp_path / "ws"), excluded_dirs=("hermes", "sci_ai_library", "svc", "logs"))
     snap = tmp_path / "ws" / "17_REPORTS" / "snap.jsonl"
     snap.parent.mkdir(parents=True, exist_ok=True)
     guard.snapshot(snap)

@@ -34,7 +34,10 @@ SENSITIVE_INTENT = re.compile(
     r"date|dated|deadline|due|completion|extension|eot\b|"
     r"status|approved|rejected|outstanding|liability|penalty|lad\b|"
     r"clause|obligation|entitled|entitlement|warranty|defects|retention|"
-    r"jumlah|harga|kos|nilai|tuntutan|bayaran|tarikh|tempoh|status)\b",
+    r"charge|charged|pay|paid|payable|quoted|quote|figure|owed|owing|balance|"
+    r"days|delay|delayed|late|when|deadline|finish|finished|agreed|"
+    r"jumlah|harga|kos|nilai|tuntutan|bayaran|tarikh|tempoh|status|"
+    r"berapa|bayar|caj|hutang|lewat|bila)\b",
     re.IGNORECASE)
 
 # Distinct content terms a chunk must share with the query before dense-only
@@ -42,9 +45,15 @@ SENSITIVE_INTENT = re.compile(
 # is coincidence at corpus scale.
 MIN_CONTENT_OVERLAP = 2
 
+# Prefix of the flag raised when a document was admitted because the user named
+# it, not because its content matched. Such an answer can never be SUPPORTED.
+NAME_ONLY_FLAG = "returned because you named "
+
 # The stopword list and tokenizer are SHARED with the lexical index (terms.py).
 # They disagreed before, and the disagreement was the whole defect.
-from .sparse import harvest_ids, is_document_code, normalize_id  # noqa: E402
+from .sparse import (  # noqa: E402
+    code_variants, harvest_ids, is_document_code, normalize_id,
+)
 from .terms import (  # noqa: E402,F401
     STOPWORDS, content_terms, df_is_meaningful, discriminative_terms,
 )
@@ -68,11 +77,13 @@ def _names_the_document(evidence: dict, qcodes: set) -> bool:
     to L-201 and says nothing about pumps. A body mention is a REFERENCE to a
     document; only the filename is the document's IDENTITY, and identity is
     what justifies returning a document the user asked for by name.
+
+    Matching is on code COMPONENTS (see `code_variants`), so `L-201-RevB.pdf`
+    and `DWG-L-201-R03.pdf` are recognised as L-201.
     """
     if not qcodes:
         return False
-    fn = evidence.get("filename", "") or ""
-    return bool(qcodes & {normalize_id(c) for c in harvest_ids(fn, limit=20)})
+    return bool(qcodes & code_variants(evidence.get("filename", "") or "", limit=20))
 
 
 @dataclass
@@ -117,10 +128,21 @@ def verify(evidence: list[dict], project_hint: str | None = None,
     # prefers a refusal to a fabrication, and DEEP is the sanctioned escalation
     # (§16). Retune against the benchmark, not by intuition.
     if query:
-        qterms = content_terms(query)
+        # Strip the project label as a PHRASE, not term by term.
+        #
+        # Round-4 reviewer N4-5: subtracting every word of the project name
+        # destroyed real evidence whenever the name was descriptive — for
+        # project "Pump Station Upgrade", the question "what is the pump
+        # warranty period" lost "pump" and a chunk literally containing the
+        # answer was refused. Real project names in this domain are noun
+        # phrases, so this fired often. Removing the phrase occurrence leaves
+        # any term that also stands on its own elsewhere in the question.
+        scoped_query = query
+        if project_hint:
+            scoped_query = re.sub(re.escape(project_hint), " ", query,
+                                  flags=re.IGNORECASE)
+        qterms = content_terms(scoped_query)
         qcodes = _query_doc_codes(query)
-        # Terms that only restate the SCOPE of the question, not its subject.
-        scope_terms = content_terms(project_hint or "")
 
         # The floor FILTERS; it does not merely gate.
         #
@@ -130,13 +152,23 @@ def verify(evidence: list[dict], project_hint: str | None = None,
         # with full §40 provenance and packed into the prompt having met no
         # floor of their own — the citation list said they were evidence.
         passed, dropped, best = [], 0, 0
+        named_only = []          # admitted by filename, not by content
         for e in kept:
             shared = qterms & content_terms(e.get("text", ""))
-            good = discriminative_terms(shared, doc_freq, total_docs,
-                                        exclude=scope_terms)
+            good = discriminative_terms(shared, doc_freq, total_docs)
             best = max(best, len(good))
-            if _names_the_document(e, qcodes) or len(good) >= MIN_CONTENT_OVERLAP:
+            on_topic = len(good) >= MIN_CONTENT_OVERLAP
+            if on_topic:
                 passed.append(e)
+            elif _names_the_document(e, qcodes):
+                # Round-4 reviewer N4-4: a filename match used to bypass the
+                # content floor for EVERY chunk of that file, unflagged — a
+                # scaffolding invoice inside "L-201.pdf" was returned SUPPORTED
+                # as evidence for a pump warranty. Naming a document justifies
+                # RETURNING it; it does not certify an arbitrary chunk of it as
+                # an answer. Kept, but marked and capped below.
+                passed.append(e)
+                named_only.append(e)
             else:
                 dropped += 1
 
@@ -155,6 +187,12 @@ def verify(evidence: list[dict], project_hint: str | None = None,
         if dropped:
             flags.append(f"dropped {dropped} retrieved item(s) that did not meet "
                          "the relevance floor (nearest neighbours, not evidence)")
+        if named_only:
+            names = sorted({e.get("filename", "?") for e in named_only})
+            flags.append(
+                NAME_ONLY_FLAG + ", ".join(names[:3])
+                + ", not because its content answers the question — "
+                "no passage in it met the relevance floor")
         kept = passed
 
     # ---- project isolation (§60)
@@ -196,25 +234,29 @@ def verify(evidence: list[dict], project_hint: str | None = None,
     # flags at all. On this corpus that is the common case, not the edge case
     # (43,897 of ~45,000 inventoried files are UNKNOWN).
     #
-    # Deliberate trade-off, recorded as DECISIONS.md D-20 and ACCEPTED by the
-    # round-3 reviewer with conditions: unattributed evidence is DISCLOSED and
-    # caps the status at PARTIAL, rather than triggering the clarification
-    # question for every query. Treating it as ambiguity outright would make
-    # almost every query on this corpus unanswerable, which would push the
-    # operator to disable the check — a guard nobody can live with is a guard
-    # that gets removed.
+    # D-20 (lenient disclosure) is WITHDRAWN — see DECISIONS.md.
     #
-    # Reviewer condition 1: that leniency does NOT extend to the questions
-    # where an unattributable source is itself the harm. For a monetary
-    # amount, a date, a status or a clause obligation, mixing an unattributed
-    # document in with a named project is a §60 wrong-project answer, and no
-    # reader treats a footnote as disqualifying a figure. Those escalate.
+    # It rested on "43,897 of ~45,000 files carry project=UNKNOWN". The
+    # round-4 reviewer showed that figure is the DOCUMENT_TYPE unknown count;
+    # the project columns sum to the same 45,645 total, so essentially every
+    # file does carry a project label and the true unattributed share is ~0%.
+    # The argument for leniency — that the strict rule would make the system
+    # unusable — was therefore false, and the round-2 reviewer's original
+    # instruction stands: unattributed evidence must not be merged with a
+    # named project. It costs almost nothing here.
+    #
+    # For SENSITIVE questions (amounts, dates, statuses, obligations) the
+    # escalation applies even when NO project is known, because "this figure
+    # comes from a document we cannot attribute" is the whole problem.
     unattributed = [e for e in kept
                     if not e.get("project") or e.get("project") == "UNKNOWN"]
     if unattributed:
         names = sorted({e.get("filename", "?") for e in unattributed})
         sensitive = bool(query and SENSITIVE_INTENT.search(query))
-        mixed = bool(projects) and not project_hint
+        # NOT gated on a known project also being present (round-4 N4-7): an
+        # all-UNKNOWN evidence set answering "what is the final claim amount?"
+        # was the case that never escalated, and it is the worst one.
+        mixed = not project_hint
         flags.append(
             f"{len(unattributed)} of {len(kept)} evidence item(s) have NO known "
             f"project and cannot be attributed: {', '.join(names[:5])}"
@@ -222,11 +264,11 @@ def verify(evidence: list[dict], project_hint: str | None = None,
             + (" — they may belong to a different project than the one asked "
                "about" if projects else
                " — nothing in this answer is attributable to a project"))
-        if sensitive and mixed and not cross_project:
+        if mixed and not cross_project and (sensitive or projects):
             flags.append(
-                "the question asks for a figure, date, status or obligation, "
-                "so unattributable evidence cannot simply be disclosed — "
-                "asking which project instead")
+                "unattributable evidence cannot be merged into an answer"
+                + (" for a figure, date, status or obligation" if sensitive else "")
+                + " — asking which project instead")
             ambiguous = True
 
     # ---- revision currency (§62)
@@ -278,6 +320,9 @@ def verify(evidence: list[dict], project_hint: str | None = None,
     status = "SUPPORTED"
     if (conflicts
             or any("cross-project question" in f for f in flags)
+            # admitted by filename alone — the user named the document, but
+            # nothing in it met the content floor (round-4 reviewer N4-4)
+            or any(f.startswith(NAME_ONLY_FLAG) for f in flags)
             # unattributed evidence must not read as fully supported (§4)
             or any(e for e in kept
                    if not e.get("project") or e.get("project") == "UNKNOWN")):

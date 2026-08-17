@@ -512,3 +512,109 @@ is worse than a refused one, because the operator believes the labels are
 correct. RESULT: `test_project_label_sync_failure_is_loud`.
 LESSON: swallowing an exception converts a loud failure into a silent wrong
 answer. On an isolation boundary that trade is never worth making.
+
+
+**F-V3-31 / honesty / a decision built on a misread column** — SYMPTOM:
+DECISIONS.md D-20 overrode an explicit reviewer instruction, justified by
+"43,897 of ~45,000 inventoried files carry project=UNKNOWN". The round-4
+reviewer showed that figure is the DOCUMENT_TYPE unknown count from
+PROJECT_STATE.md. The document-type rows sum to 1,748 + 43,897 = 45,645, and
+the project rows sum to exactly 45,645 too, so essentially every file carries a
+project label and the true unattributed share is ≈0%. ROOT CAUSE: I read a
+number off a table that supported the conclusion I already preferred, without
+checking which column it came from — and then used it to decline an
+instruction. FIX: D-20 withdrawn in place (not deleted); the strict rule is
+implemented for every question, plus for sensitive questions even when no
+project is known; PROJECT_STATE now flags the trap in the table itself; and
+`alirag status` reports `project_unknown_pct` so the claim can be checked
+against the index rather than a remembered figure. RESULT:
+`test_unattributed_evidence_is_never_merged_with_a_named_project`,
+`test_fully_attributed_evidence_still_answers_normally`,
+`test_all_unknown_evidence_escalates_for_a_figure`.
+LESSON: the number that lets you keep your preferred design is the one to check
+twice. §51 exists because the builder is the last person who will.
+
+**F-V3-32 / grounding / measurement was applied as a REPLACEMENT, not a floor**
+— SYMPTOM: the round-3 fix weighted shared terms by document frequency instead
+of by a word list. The round-4 reviewer showed that above MIN_DOCS_FOR_DF the
+list became dead code, so any boilerplate word whose measured frequency fell
+under MAX_DF_RATIO was RESTORED as discriminating — and two are enough. On an
+800-chunk index, "which contractor shall supply the pump and the generator?"
+came back SUPPORTED (not PARTIAL) from a rain-tree chunk. The production index
+is 16,782 chunks, so the measured path is always live and the list never
+applied where it was needed. ROOT CAUSE: an upgrade from a weak instrument to a
+better one was implemented as a swap, making the guard weaker in exactly the
+regime it was strengthened for. FIX: the boilerplate list always applies;
+measurement may only remove further terms, never add them back. RESULT:
+`test_measurement_can_only_make_the_floor_stricter`,
+`test_boilerplate_is_refused_at_scale_even_when_rare`, and both attack queries
+re-tested against a 260-document fixture.
+LESSON: when replacing a guard with a better one, union them. A "better"
+instrument that is weaker on some inputs is not better.
+
+**F-V3-33 / test coverage / no test ever ran the production instrument** —
+SYMPTOM: replacing `Engine._term_stats` with `return None, 0` — the engine
+never computing or passing document frequencies at all — left 179/179 tests
+green. ROOT CAUSE: the fixture corpus is 6 chunks and MIN_DOCS_FOR_DF is 200,
+so the measured path could not execute in any test; only two unit tests fed
+hand-written dicts to the scoring function. The suite was calibrated entirely
+against the fallback list while production ran on the other branch. My commit
+claimed "all 17 fixes were individually reverted and their tests observed to
+fail", which was false for this one. FIX: a 260-document fixture
+(`big_ingested`) above the threshold, an end-to-end test that goes red when the
+plumbing is disabled, and a guard test asserting the fixture is still large
+enough — so this cannot rot back silently. RESULT:
+`test_the_big_fixture_actually_exercises_measured_weighting`,
+`test_measured_weighting_is_wired_end_to_end`,
+`test_attack_queries_refused_at_scale`.
+LESSON: a threshold that no test can cross means the code above it is
+unexecuted, not merely untested. Check that fixtures can reach every branch
+before claiming a revert matrix is complete.
+
+**F-V3-34 / §84 / the allowlist check was written to the examples, not the
+class** — SYMPTOM: R3-7 refused bare `*` and bare document-extension globs —
+the two strings the round-3 reviewer had cited. `*/Dawson/*`, `*/Tender/*` and
+`*/sources/*` were all accepted, and with one of them a tender was rewritten
+and an instruction deleted while §84 reported `pass: True`. Separately,
+`reviewer.audit` gated on `pass` and ignored `verdict`, so PASS_WITH_EXCUSES was
+decorative at the only place that consumed it. ROOT CAUSE: a blocklist has to
+anticipate every way of naming the corpus. FIX: inverted to a positive rule — a
+volatile declaration must name a directory the operator has ALREADY excluded
+from indexing (`ingest.exclude_dirs`), which cannot be widened without a
+separate, visible declaration that the directory holds nothing worth indexing.
+The audit now requires `verdict == "PASS"`. RESULT:
+`test_volatile_patterns_naming_the_corpus_are_refused` (5 patterns),
+`test_audit_refuses_to_certify_an_excused_safety_run`.
+LESSON: fixing the reviewer's example is not fixing the finding. Ask what class
+the example belongs to, and prefer a rule that enumerates what is ALLOWED.
+
+**F-V3-35 / grounding / three smaller repeats of the same mistake** —
+(a) `normalize_id("L-201-RevB")` is one greedy token, so `find L-201` returned
+INSUFFICIENT while the file sat in the nearest-match list — and
+revision-suffixed and prefix-qualified sheet names are the norm in this corpus,
+so the §9 exact path was broken for most real drawings. Codes now match as
+COMPONENTS. (b) A filename code match bypassed the content floor for every
+chunk of that file, unflagged: a scaffolding invoice inside `L-201.pdf` was
+returned SUPPORTED as evidence for a pump warranty. Naming a document now
+justifies returning it, flagged, and can never read as SUPPORTED. (c) The
+project label was subtracted term by term, so for project "Pump Warranty
+Programme" the question "what is the pump warranty period" lost both content
+words and a chunk stating the answer verbatim was refused; the label is now
+removed as a phrase. RESULT: `test_document_codes_match_inside_longer_filenames`,
+`test_naming_a_revision_suffixed_document_answers`,
+`test_naming_a_file_does_not_certify_arbitrary_content`,
+`test_project_label_is_excluded_as_a_phrase_not_term_by_term`.
+LESSON: (a) and (c) are the same bug in opposite directions — a rule that was
+too strict where it should have been structural. Tightening a guard can lose
+real evidence just as silently as loosening it lets fabrication through.
+
+**F-V3-36 / benchmark / the wrong-project metric excused its own population** —
+SYMPTOM: `wrong_project_rate` treated `project in (expected, "UNKNOWN", None)`
+as not-wrong, so unattributed sources scored as CORRECT and an all-UNKNOWN
+corpus reported a perfect 0.0 — satisfying the reviewer's `< 0.2` gate without
+measuring §60 at all. FIX: unattributed sources are excluded from the
+denominator and counted separately; the rate is `None` when nothing was
+measurable, and `None` cannot satisfy the gate. RESULT:
+`test_wrong_project_rate_excludes_unattributed_from_the_denominator`.
+LESSON: a metric that scores "unknown" as "correct" reports best when it knows
+least.

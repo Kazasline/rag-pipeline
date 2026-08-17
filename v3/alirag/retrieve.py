@@ -70,6 +70,7 @@ class Retriever:
             out.append({**h, "text": row["text"], "page": row["page"],
                         "locator": row["locator"], "filename": row["filename"],
                         "path": row["original_path"], "project": row["project"],
+                        "project_source": row["project_source"],
                         "revision": row["revision"],
                         "document_type": row["document_type"],
                         "superseded_by": row["superseded_by"],

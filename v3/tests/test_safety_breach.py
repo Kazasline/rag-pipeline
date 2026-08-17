@@ -21,7 +21,11 @@ from alirag.safety import SafetyGuard
 def _guard(tmp_path):
     src = tmp_path / "src"
     src.mkdir(exist_ok=True)
-    return SafetyGuard([str(src)], str(tmp_path / "ws")), src
+    # hermes/sci_ai_library are the operator's live services, already excluded
+    # from indexing — the only kind of directory a volatile declaration may
+    # point at (round-4 reviewer N4-6).
+    return SafetyGuard([str(src)], str(tmp_path / "ws"),
+                       excluded_dirs=("hermes", "sci_ai_library")), src
 
 
 def _snap(guard, tmp_path):

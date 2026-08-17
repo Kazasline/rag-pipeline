@@ -122,10 +122,22 @@ def discriminative_terms(shared: set, doc_freq: dict | None = None,
     out = {t for t in shared if not _REV_TERM_RE.match(t)}
     if exclude:
         out -= exclude
+    # The boilerplate list ALWAYS applies. Measurement may only make the floor
+    # stricter, never looser.
+    #
+    # Round-4 reviewer N4-1: this used to *replace* the list with the DF test
+    # above MIN_DOCS_FOR_DF, so on the real 16,782-chunk index the list was
+    # dead code and every boilerplate word whose corpus frequency happened to
+    # fall under MAX_DF_RATIO was RESTORED as discriminating. Two are enough:
+    # "which contractor shall supply the pump?" came back SUPPORTED from a
+    # rain-tree chunk on {contractor, shall, supply}. The "upgrade" from list
+    # to measurement was a loosening, and it re-opened the exact hole it was
+    # written to close.
+    out = {t for t in out if t not in DOMAIN_BOILERPLATE}
     if doc_freq is not None and total_docs >= MIN_DOCS_FOR_DF:
-        return {t for t in out
-                if doc_freq.get(t, 0) / total_docs <= MAX_DF_RATIO}
-    return {t for t in out if t not in DOMAIN_BOILERPLATE}
+        out = {t for t in out
+               if doc_freq.get(t, 0) / total_docs <= MAX_DF_RATIO}
+    return out
 
 
 def df_is_meaningful(total_docs: int) -> bool:

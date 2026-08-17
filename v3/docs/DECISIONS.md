@@ -132,28 +132,34 @@ gains real `think` support, or if the backend shootout (§33) moves serving to
 llama.cpp, where the OpenAI path applies again.
 
 
-**D-20 — Unattributed (`project=UNKNOWN`) evidence is disclosed, not refused.**
-Alternatives: (a) refuse to co-mingle UNKNOWN evidence with a named project and
-return the §60 clarification question — what the round-2 reviewer instructed;
-(b) drop UNKNOWN evidence silently; (c) treat UNKNOWN as "no objection", which
-is what the code did before round 2 and is indefensible.
+**D-20 — WITHDRAWN. Unattributed evidence is NOT merged with a named project.**
 
-Chosen: disclose by filename, cap the verdict at PARTIAL, and escalate to
-`AMBIGUOUS_PROJECT` for the question classes where an unattributable source is
-itself the harm (monetary amounts, dates, statuses, clause obligations —
-`verify.SENSITIVE_INTENT`).
+This entry previously argued for disclosing `project=UNKNOWN` evidence and
+capping the verdict at PARTIAL, rather than returning the §60 clarification
+question, on the grounds that **"43,897 of ~45,000 inventoried files carry
+`project=UNKNOWN`"**.
 
-Why not (a) everywhere: **43,897 of ~45,000 inventoried files carry
-`project=UNKNOWN`** (measured, PROJECT_STATE.md, after the real `--reinfer`
-run). At that ratio the strict rule returns a clarification question to nearly
-every query, and a guard that makes the product unusable gets switched off —
-at which point it protects nothing. This overrides an explicit reviewer
-instruction, which is why it is written down here rather than left in a
-docstring; the round-3 reviewer accepted it with three conditions, all
-implemented: the sensitive-intent escalation above, this entry, and
-`project_unknown_pct` in `alirag status`.
+**That figure was the DOCUMENT_TYPE unknown count, not the project count.** The
+round-4 reviewer caught it. The arithmetic is unambiguous: the document-type
+rows in PROJECT_STATE.md sum to 1,748 known + 43,897 UNKNOWN = 45,645, and the
+project rows (SITE CONCEPT INTERNATIONAL 25,042 + AI MAIN MEMORY 15,431 + AI
+5,172) sum to exactly 45,645 as well. `inventory.py` assigns the first path
+segment as the project for any file more than one level deep, so essentially
+every file carries a label and the true unattributed share is ≈0%.
 
-REVISIT when UNKNOWN drops below 40% of indexed files — at that point the
-strict rule costs little and should be adopted. Until then, watch
-`project_unknown_pct`: this decision is only as defensible as that number is
-visible.
+The decision therefore rested on a misread column, and it was used to override
+an explicit reviewer instruction. The instruction stands: unattributed evidence
+is not merged with a named project, and for sensitive questions (amounts,
+dates, statuses, obligations) it is not merged even when no project is known —
+`verify()` returns AMBIGUOUS_PROJECT. On this corpus that costs almost nothing,
+which is what the withdrawn argument claimed to have measured and had not.
+
+Kept as a withdrawal rather than deleted, because the failure mode is the point:
+a number that supports the conclusion you already prefer is the one to check
+twice. `alirag status` now reports `project_unknown_pct` so this class of claim
+can be checked against the index instead of against a remembered table.
+
+The label being PRESENT is not the same as the label being RIGHT — the projects
+above are folder names ("AI MAIN MEMORY" is not a project), and citations now
+carry `project_source` so a folder-derived guess is visible as one (see N4-9).
+

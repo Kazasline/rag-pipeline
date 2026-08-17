@@ -202,9 +202,18 @@ def run_retrieval_bench(cfg: Config, questions_path: Path,
         # genuinely measured. Reporting 0.0 for "not checked" is what let an
         # unmeasured benchmark satisfy the reviewer's wrong-project gate.
         expected_project = rec.get("project")
-        wrong_project = any(
-            s.get("project") not in (expected_project, "UNKNOWN", None)
-            for s in resp.get("sources", [])[:3])
+        top3 = resp.get("sources", [])[:3]
+        # Round-4 reviewer N4-10: `project in (expected, "UNKNOWN", None)`
+        # scored an UNATTRIBUTED source as CORRECT, so the metric excused
+        # exactly the population it exists to police — on an all-UNKNOWN
+        # corpus it reported a perfect 0.0. Unattributed sources are counted
+        # separately and excluded from the denominator, so the rate is a
+        # statement about sources whose project is actually known.
+        attributed = [s for s in top3
+                      if s.get("project") not in ("UNKNOWN", None, "")]
+        wrong_project = any(s.get("project") != expected_project
+                            for s in attributed)
+        unattributed_top3 = len(top3) - len(attributed)
         # Which retrieval legs actually contributed. §86 asks whether each
         # layer earns its complexity; that cannot be checked from recall alone
         # if the "baseline" silently still ran the full stack.
@@ -212,6 +221,8 @@ def run_retrieval_bench(cfg: Config, questions_path: Path,
                                for leg in (s.get("retrievers") or [])})
         per_q.append({"q": rec["q"], "kind": rec.get("kind"), "mode": resp["mode"],
                       "sources_used": sources_used,
+                      "measurable_project": bool(attributed),
+                      "unattributed_in_top3": unattributed_top3,
                       "first_rank": first, "page_ok": page_ok,
                       "wrong_project_in_top3": wrong_project,
                       "evidence_status": resp["evidence_status"],
@@ -236,9 +247,14 @@ def run_retrieval_bench(cfg: Config, questions_path: Path,
                    for k in k_values},
         "mrr": round(sum(1 / r["first_rank"] for r in per_q if r["first_rank"]) / n, 3),
         "citation_page_accuracy": _ratio([r["page_ok"] for r in per_q]),
-        "wrong_project_rate": round(
-            sum(1 for r in per_q if r["wrong_project_in_top3"]) / n, 3),
-        "wrong_project_measured": n,   # explicit: how many questions were checked
+        # Only questions with at least one ATTRIBUTED source in the top 3 can
+        # be scored; the rest are reported, not silently counted as correct.
+        "wrong_project_rate": (
+            round(sum(1 for r in per_q if r["wrong_project_in_top3"])
+                  / max(1, sum(1 for r in per_q if r["measurable_project"])), 3)
+            if any(r["measurable_project"] for r in per_q) else None),
+        "wrong_project_measured": sum(1 for r in per_q if r["measurable_project"]),
+        "unattributed_sources_in_top3": sum(r["unattributed_in_top3"] for r in per_q),
         "latency_ms": {"p50": round(percentile(latencies, 50), 1),
                        "p95": round(percentile(latencies, 95), 1),
                        "p99": round(percentile(latencies, 99), 1),

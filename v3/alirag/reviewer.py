@@ -98,8 +98,14 @@ def audit(cfg: Config) -> dict:
         if not safety.get("hashed"):
             safety_detail += (" — WARNING: snapshot has no content hashes, so "
                               "same-size edits and renames are invisible")
+    # Round-4 reviewer N4-6: this gated on `pass` and ignored `verdict`, so the
+    # PASS_WITH_EXCUSES field added in round 3 was decorative at the only place
+    # that consumed it — the audit still certified a run carried by an
+    # allowlist. §84 acceptance requires a CLEAN run.
     item("DATA_SAFETY", _latest("safety_verify*.json", reports),
-         None if safety is None else bool(safety.get("pass")) and bool(safety.get("hashed")),
+         None if safety is None else (
+             safety.get("verdict", "PASS" if safety.get("pass") else "FAIL") == "PASS"
+             and bool(safety.get("hashed"))),
          safety_detail)
 
     # per-mode benchmarks (§80–§82)
@@ -114,11 +120,15 @@ def audit(cfg: Config) -> dict:
             # mode may have executed another.
             measured = rep.get("wrong_project_measured", 0)
             modes = rep.get("modes_run") or []
+            # `wrong_project_rate` is None when nothing was attributable and
+            # therefore nothing was measurable (§60). None is not a passing
+            # value, and comparing it would raise rather than fail cleanly.
+            wpr = rep.get("wrong_project_rate")
             ok = (rep.get("questions", 0) >= 5
                   and rep.get("recall", {}).get("@5", 0) > 0
                   and measured >= rep.get("questions", 0)
                   and modes == [mode]
-                  and rep.get("wrong_project_rate", 1.0) < 0.2)
+                  and wpr is not None and wpr < 0.2)
             detail += (f" — recall@5={rep.get('recall', {}).get('@5')}, "
                        f"wrong_project={rep.get('wrong_project_rate')} "
                        f"(measured on {measured} questions), "
