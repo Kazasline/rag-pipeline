@@ -359,4 +359,65 @@ def test_keep_alive_sent_on_native_requests(monkeypatch):
 
     monkeypatch.setattr(llm_mod.urllib.request, "urlopen", fake_urlopen)
     llm_mod.LLMClient(cfg).chat("s", "u", mode="FAST")
-    assert captured["body"]["keep_alive"] == "-1"
+    # numeric, not the string "-1" — Ollama rejects the latter (F-V3-14)
+    assert captured["body"]["keep_alive"] == -1
+
+
+# ---------------------------------------------------------------- F-V3-14
+def test_keep_alive_is_sent_as_a_number_not_a_string():
+    """Ollama rejects the bare string "-1"; it needs a number or a duration."""
+    from alirag.llm import _keep_alive_value
+    assert _keep_alive_value("-1") == -1
+    assert _keep_alive_value(-1) == -1
+    assert _keep_alive_value("3600") == 3600
+    assert _keep_alive_value("10m") == "10m"      # duration strings pass through
+    assert _keep_alive_value("24h") == "24h"
+
+
+def test_native_request_keep_alive_is_numeric(monkeypatch):
+    import io
+    import alirag.llm as llm_mod
+    from alirag.config import Config
+
+    cfg = Config()
+    cfg.llm.api_style = "ollama_native"
+    captured = {}
+
+    class FakeResp(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode())
+        return FakeResp(b'{"message":{"content":"x"},"done":true,"done_reason":"stop"}')
+
+    monkeypatch.setattr(llm_mod.urllib.request, "urlopen", fake_urlopen)
+    llm_mod.LLMClient(cfg).chat("s", "u", mode="FAST")
+    assert captured["body"]["keep_alive"] == -1
+    assert not isinstance(captured["body"]["keep_alive"], str)
+
+
+def test_rejected_request_reports_the_server_reason(monkeypatch):
+    """A 400 must not be reported as 'unreachable' — the body names the cause."""
+    import io
+    import urllib.error
+    import alirag.llm as llm_mod
+    from alirag.config import Config
+
+    cfg = Config()
+    cfg.llm.api_style = "ollama_native"
+
+    def fake_urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(
+            req.full_url, 400, "Bad Request", {},
+            io.BytesIO(b'{"error":"invalid keep_alive"}'))
+
+    monkeypatch.setattr(llm_mod.urllib.request, "urlopen", fake_urlopen)
+    try:
+        llm_mod.LLMClient(cfg).chat("s", "u", mode="FAST")
+        raise AssertionError("should have raised")
+    except llm_mod.LLMError as e:
+        msg = str(e)
+        assert "refused" in msg and "400" in msg
+        assert "invalid keep_alive" in msg, "server's reason must be surfaced"
+        assert "unreachable" not in msg

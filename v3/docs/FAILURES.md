@@ -216,3 +216,25 @@ requested by the client that needs it. RESULT:
 re-measurement on the machine.
 LESSON: separate "time to first token" from "time to load the model" before
 concluding anything about inference speed.
+
+**F-V3-14 / 2026-08-17 / LLM client / my own keep_alive fix broke every query
+with HTTP 400** — SYMPTOM: immediately after shipping F-V3-13, all three FAST
+queries failed with `(LLM unavailable: Ollama unreachable at
+http://127.0.0.1:11434: HTTP Error 400: Bad Request)`. Retrieval still worked
+and cited correct sources, but no answer was generated at all. ROOT CAUSE: two
+faults, both mine. (a) `keep_alive` was sent as the STRING `"-1"`. Ollama
+accepts a NUMBER of seconds (-1 = indefinitely) or a duration string carrying a
+unit ("10m", "24h"); a bare "-1" parses as neither, so the whole request was
+rejected. (b) The error handler treated every `OSError` as "unreachable", and
+`HTTPError` subclasses `OSError` — so a request that was received and *refused*
+was reported as a server that could not be reached, hiding the actual reason in
+the discarded response body. FIX: `_keep_alive_value()` sends numeric-looking
+values as numbers and passes duration strings through; `HTTPError` is caught
+before `OSError` and reports status plus the server's response body. RESULT:
+`test_keep_alive_is_sent_as_a_number_not_a_string`,
+`test_native_request_keep_alive_is_numeric`,
+`test_rejected_request_reports_the_server_reason`. The pre-existing test had
+asserted the buggy string form, so it encoded the defect and was corrected.
+LESSON: two — a fix shipped without exercising the real backend can be worse
+than the bug it replaces; and "unreachable" must never be the label for
+"refused", because it sends diagnosis to the wrong place entirely.

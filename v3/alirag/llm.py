@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import time
+import urllib.error
 import urllib.request
 
 
@@ -25,6 +26,38 @@ class LLMError(RuntimeError):
 
 
 MODE_EFFORT = {"FAST": "low", "DEEP": "medium", "FULLSWING": "high"}
+
+
+def _keep_alive_value(raw: str | int):
+    """Normalise keep_alive for Ollama.
+
+    F-V3-14: sending the string "-1" produced HTTP 400. Ollama accepts either a
+    NUMBER of seconds (-1 meaning indefinitely) or a duration STRING with a unit
+    ("10m", "24h"); a bare "-1" is neither, so it fails to parse. Numeric-looking
+    values are therefore sent as numbers and everything else passes through as a
+    duration string.
+    """
+    if isinstance(raw, (int, float)):
+        return raw
+    text = str(raw).strip()
+    try:
+        return int(text)
+    except ValueError:
+        return text          # e.g. "10m", "24h" — a valid duration string
+
+
+def _http_error_detail(e) -> str:
+    """Include the server's explanation of a rejected request.
+
+    A 400 means the request was received and refused, so reporting it as
+    "unreachable" hides the reason (F-V3-14). The response body usually names
+    the offending field.
+    """
+    try:
+        body = e.read().decode("utf-8", errors="replace")[:400]
+    except Exception:  # noqa: BLE001 — diagnostics must never raise
+        body = ""
+    return f"HTTP {e.code} {e.reason}" + (f" — {body}" if body else "")
 
 
 def _empty_reason(text: str, reasoning_tokens: int, finish_reason: str | None) -> str | None:
@@ -97,7 +130,7 @@ class LLMClient:
             # almost entirely load time (F-V3-13). Sending it per request is
             # more reliable than OLLAMA_KEEP_ALIVE, which depends on the service
             # environment rather than the caller's.
-            "keep_alive": self.cfg.keep_alive,
+            "keep_alive": _keep_alive_value(self.cfg.keep_alive),
             "options": {"num_predict": self.max_tokens.get(mode, 1024),
                         "temperature": 0.2},
         }
@@ -133,6 +166,10 @@ class LLMClient:
                     if rec.get("done"):
                         finish_reason = rec.get("done_reason") or "stop"
                         break
+        except urllib.error.HTTPError as e:
+            raise LLMError(
+                f"Ollama refused the request at {base}/api/chat: "
+                f"{_http_error_detail(e)}") from e
         except OSError as e:
             raise LLMError(f"Ollama unreachable at {base}: {e}") from e
         total = time.perf_counter() - t0
@@ -205,6 +242,10 @@ class LLMClient:
                             ttft = time.perf_counter() - t0
                         parts.append(content)
                         ntok += 1
+        except urllib.error.HTTPError as e:
+            raise LLMError(
+                f"LLM endpoint refused the request at {self.cfg.base_url}: "
+                f"{_http_error_detail(e)}") from e
         except OSError as e:
             raise LLMError(f"LLM endpoint unreachable at {self.cfg.base_url}: {e}") from e
         total = time.perf_counter() - t0
