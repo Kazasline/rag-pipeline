@@ -273,3 +273,90 @@ def test_ollama_native_enables_thinking_for_deep(monkeypatch):
     monkeypatch.setattr(llm_mod.urllib.request, "urlopen", fake_urlopen)
     llm_mod.LLMClient(cfg).chat("s", "u", mode="DEEP")
     assert captured["body"]["think"] is True, "DEEP should think"
+
+
+# ---------------------------------------------------------------- F-V3-12
+def _ingest_corpus(cfg):
+    from alirag.ingest import Ingestor
+    from alirag.inventory import scan
+    from alirag.manifest import Manifest
+    from alirag.safety import SafetyGuard
+    guard = SafetyGuard(cfg.source_roots, cfg.workspace)
+    mf = Manifest(cfg.manifest_db)
+    scan(cfg, guard, mf, progress_every=0)
+    ing = Ingestor(cfg, mf=mf)
+    ing.run()
+    ing.close()
+
+
+def test_failed_generation_is_never_cached(cfg, corpus, monkeypatch):
+    """An empty answer must not be stored and replayed after the fix."""
+    from alirag.answer import Engine
+    _ingest_corpus(cfg)
+
+    eng = Engine(cfg)
+    monkeypatch.setattr(eng.llm, "chat", lambda *a, **k: {
+        "text": "", "ttft_ms": 0, "gen_ms": 900.0, "tokens": 0,
+        "reasoning_tokens": 921, "finish_reason": "length",
+        "empty_reason": "hit the token limit", "tokens_per_s": None})
+    first = eng.query("find LAI-003", use_cache=True)
+    assert first["generation_error"]
+
+    # the model now works; the earlier failure must not be replayed
+    monkeypatch.setattr(eng.llm, "chat", lambda *a, **k: {
+        "text": "RM 97,923.07 mengikut [1].", "ttft_ms": 120.0, "gen_ms": 900.0,
+        "tokens": 12, "reasoning_tokens": 0, "finish_reason": "stop",
+        "empty_reason": None, "tokens_per_s": 13.3})
+    second = eng.query("find LAI-003", use_cache=True)
+    assert second["cached"] is False, "a failed generation was cached"
+    assert "97,923.07" in second["answer"]
+    eng.close()
+
+
+def test_config_change_invalidates_cache(cfg, corpus, monkeypatch):
+    """Switching model/API must not serve answers produced by the old one."""
+    from alirag.answer import Engine
+    _ingest_corpus(cfg)
+
+    eng = Engine(cfg)
+    monkeypatch.setattr(eng.llm, "chat", lambda *a, **k: {
+        "text": "jawapan lama", "ttft_ms": 10.0, "gen_ms": 10.0, "tokens": 2,
+        "reasoning_tokens": 0, "finish_reason": "stop",
+        "empty_reason": None, "tokens_per_s": 1.0})
+    eng.query("find LAI-003", use_cache=True)
+    assert eng.query("find LAI-003", use_cache=True)["cached"] is True
+    eng.close()
+
+    cfg.llm.model_fast = "different-model:9b"
+    eng2 = Engine(cfg)
+    monkeypatch.setattr(eng2.llm, "chat", lambda *a, **k: {
+        "text": "jawapan baharu", "ttft_ms": 10.0, "gen_ms": 10.0, "tokens": 2,
+        "reasoning_tokens": 0, "finish_reason": "stop",
+        "empty_reason": None, "tokens_per_s": 1.0})
+    fresh = eng2.query("find LAI-003", use_cache=True)
+    assert fresh["cached"] is False, "model change must invalidate the cache"
+    assert fresh["answer"] == "jawapan baharu"
+    eng2.close()
+
+
+def test_keep_alive_sent_on_native_requests(monkeypatch):
+    """Weights must be asked to stay resident; a reload dominates TTFT."""
+    import io
+    import alirag.llm as llm_mod
+    from alirag.config import Config
+
+    cfg = Config()
+    cfg.llm.api_style = "ollama_native"
+    captured = {}
+
+    class FakeResp(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode())
+        return FakeResp(b'{"message":{"content":"x"},"done":true,"done_reason":"stop"}')
+
+    monkeypatch.setattr(llm_mod.urllib.request, "urlopen", fake_urlopen)
+    llm_mod.LLMClient(cfg).chat("s", "u", mode="FAST")
+    assert captured["body"]["keep_alive"] == "-1"

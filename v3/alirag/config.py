@@ -87,6 +87,10 @@ class LLMConfig:
     # actually disable thinking on Ollama: the /v1 shim drops non-standard
     # fields, so `think: false` never reaches the model (F-V3-11).
     api_style: str = "openai"
+    # How long the backend should keep weights loaded between queries.
+    # "-1" = indefinitely. Sent per request on the Ollama-native path because
+    # a model unload puts a full load on the critical path of the next query.
+    keep_alive: str = "-1"
     api_key: str = ""                    # local servers usually ignore this; never commit real keys
     timeout_s: float = 300.0
     # Budgets must cover chain-of-thought AND the answer. Measured on Qwen3.5:

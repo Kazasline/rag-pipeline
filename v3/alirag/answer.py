@@ -76,9 +76,20 @@ class Engine:
         return self._cache_dir / f"q_{h}.json"
 
     def _index_fingerprint(self) -> str:
+        """Cache validity key.
+
+        Covers the index AND the pipeline/model configuration: a code or model
+        change alters how an answer is produced, so cached answers from before
+        it must not survive (F-V3-12). Otherwise a fixed bug keeps being served
+        from cache and looks unfixed.
+        """
+        from . import PIPELINE_VERSION
         row = self.mf.con.execute(
             "SELECT COUNT(*), IFNULL(MAX(indexed_at),0) FROM files").fetchone()
-        return f"{row[0]}:{row[1]}"
+        cfg = self.cfg.llm
+        return (f"{row[0]}:{row[1]}:{PIPELINE_VERSION}:{cfg.api_style}:"
+                f"{cfg.model}:{cfg.model_fast}:{cfg.model_deep}:"
+                f"{cfg.model_fullswing}:{cfg.max_answer_tokens_fast}")
 
     # ------------------------------------------------------------ main
     def query(self, query: str, mode_override: str | None = None,
@@ -140,7 +151,12 @@ class Engine:
         trace.finish()
         trace.save(self.cfg.dir("query_history"))
         resp["latency_ms"] = trace.data["stages"] | {"total": trace.data["total_ms"]}
-        if use_cache and resp.get("evidence_status") != "INSUFFICIENT":
+        # F-V3-12: never cache a failed generation. An empty answer was stored
+        # under PARTIAL and then served back after the bug was fixed, so the
+        # failure outlived its cause and looked unfixed.
+        cacheable = (resp.get("evidence_status") != "INSUFFICIENT"
+                     and not resp.get("generation_error"))
+        if use_cache and cacheable:
             try:
                 cache_path.write_text(json.dumps(resp, ensure_ascii=False,
                                                  default=str), encoding="utf-8")

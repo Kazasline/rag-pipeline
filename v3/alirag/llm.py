@@ -92,6 +92,12 @@ class LLMClient:
                          {"role": "user", "content": user}],
             "stream": True,
             "think": mode != "FAST",
+            # Keep weights resident between queries. Measured: with the model
+            # unloading, TTFT was 20.5s while decoding took 918ms — the wait was
+            # almost entirely load time (F-V3-13). Sending it per request is
+            # more reliable than OLLAMA_KEEP_ALIVE, which depends on the service
+            # environment rather than the caller's.
+            "keep_alive": self.cfg.keep_alive,
             "options": {"num_predict": self.max_tokens.get(mode, 1024),
                         "temperature": 0.2},
         }

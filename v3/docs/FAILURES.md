@@ -186,3 +186,33 @@ accommodate hidden reasoning. RESULT: `test_ollama_native_stream_parsing`,
 `test_ollama_native_enables_thinking_for_deep`.
 LESSON: a compatibility shim silently dropping a parameter looks exactly like
 the parameter having no effect — verify the knob arrives, don't just set it.
+
+**F-V3-12 / 2026-08-17 / query cache / a fixed bug kept being served from
+cache** — SYMPTOM: after F-V3-09/F-V3-11 were fixed and deployed, the same
+query still returned the old "model produced 921 reasoning tokens" failure,
+with `"cached": true`. ROOT CAUSE: two compounding faults. (a) The empty-answer
+path returns `PARTIAL`, and caching excluded only `INSUFFICIENT`, so a FAILED
+generation was written to cache as if it were a result. (b) The cache
+fingerprint covered only the index (file count + last indexed time), so fixing
+the code or switching the model did not invalidate anything — the failure
+outlived its cause and made a working fix look broken. FIX: never cache a
+response carrying `generation_error`; fingerprint now includes the pipeline
+version and the LLM configuration (api_style, models, FAST token budget), so a
+code or model change invalidates prior answers. RESULT:
+`test_failed_generation_is_never_cached`, `test_config_change_invalidates_cache`.
+LESSON: cache validity must cover everything that shapes the answer, not just
+the data — and a failure is not a result worth keeping.
+
+**F-V3-13 / 2026-08-17 / serving / TTFT was model loading, not inference** —
+SYMPTOM: a successful FAST answer measured `ttft_ms: 20,550` while
+`generation: 918 ms` and decoding ran at 115 tok/s — the user waited 20 seconds
+for a model that then answered in under a second. ROOT CAUSE: Ollama unloads
+idle models, so each query paid a full load. `OLLAMA_KEEP_ALIVE` had been set
+as an environment variable, but that depends on the service's environment
+rather than the caller's and did not take effect. FIX: send `keep_alive`
+(default `-1`, indefinite) with every native request, so residency is
+requested by the client that needs it. RESULT:
+`test_keep_alive_sent_on_native_requests`; end-to-end effect awaiting
+re-measurement on the machine.
+LESSON: separate "time to first token" from "time to load the model" before
+concluding anything about inference speed.

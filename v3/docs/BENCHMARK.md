@@ -101,6 +101,31 @@ Generation, however, returned **empty** after 22.5 s (F-V3-09) — the token
 budget went entirely to chain-of-thought. That is fixed but **not yet
 re-measured**, so no TTFT improvement is claimed here.
 
+### Third run (2026-08-17) — first genuinely grounded answer
+
+`cepat: berapa jumlah Cert Payment No.11 AVC?` produced a real, cited answer in
+the language of the question:
+
+> "Berdasarkan bukti [4], jumlah **AMOUNT DUE TO CONTRACTOR (EXCL GST)** untuk
+> Claim No. 11 ialah **RM 97,923.07**. Nota: Previous Claim (Cert no.1-10)
+> RM 1,594,215.33, jumlah keseluruhan RM 1,735,526.56."
+
+Evidence spanned four sources including an `.xlsx` cited as
+`Sheet 'Certified' rows 1+`, all correctly attributed to the right project.
+
+| metric | value |
+|---|---|
+| reasoning_tokens | **0** — thinking genuinely disabled (F-V3-11 fixed) |
+| finish_reason | `stop` |
+| decode | 918 ms @ 115.4 tok/s |
+| sparse / fusion | 12 ms / 1.3 ms |
+| dense | 860 ms |
+| **TTFT** | **20,550 ms — still the objective's blocker** |
+
+TTFT minus decode leaves ~19.6 s of model loading (F-V3-13). `keep_alive` is
+now sent per request; the effect is **not yet measured**, so the FAST objective
+remains recorded as not met.
+
 ### Not measured yet
 
 Recall@K, MRR, citation accuracy and wrong-project rate — all require the
