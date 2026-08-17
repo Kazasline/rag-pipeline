@@ -55,10 +55,13 @@ Why: §33 — LM Studio, llama.cpp, vLLM, SGLang, Ollama all expose it, so the
 backend shootout is a config change. `reasoning_param_style` isolates the
 §34 per-backend thinking-mode syntax that must be verified from docs.
 
-**D-11 — `llm.model` ships as `UNVERIFIED-…`.**
+**D-11 — `llm.model` ships as `UNVERIFIED-…`.** _(superseded by D-15 for this
+machine; the default in the repo stays UNVERIFIED for any other machine.)_
 Why: §0/§3 — the prompt's "Qwen3.8-27B" is unverified against the machine;
 Phase 0 detects reality. Refusing a plausible default is deliberate: the
-system fails loudly instead of silently querying the wrong model.
+system fails loudly instead of silently querying the wrong model. Vindicated
+twice: the model was genuinely absent at first inspection, and F-V3-05 showed
+a server-only probe can also under-report what is installed.
 
 **D-12 — Verifier includes a relevance floor (INSUFFICIENT when only dense
 neighbors with zero lexical/term connection).**
@@ -79,3 +82,32 @@ Why: §5 wants E:\ALI_RAG; V1's pCloud corruption (2026-06-26) proves synced
 drives kill SQLite/memmap. Phase 0 reports drive types; if E: is synced,
 point `workspace` (or at least `08_VECTOR_INDEX`) at a local disk — config
 supports it.
+
+## Decisions from the first on-machine run (2026-08-17)
+
+**D-15 — Primary model = `qwen3.8:27b`; FAST split onto `qwen3.5:9b`.**
+Alternatives: one resident model for all modes; a 9B everywhere; a 35B for
+depth. Why: qwen3.8:27b is the brief's intended model and is real (18 GB, 256K
+ctx, text+image), but it exceeds 16.3 GB VRAM so it cannot serve a sub-second
+FAST path. Splitting keeps `cepat:` genuinely fast while giving depth queries
+the better model. Revisit: measured swap cost — if mixed-mode usage pays more
+in weight-swapping than it gains, collapse back to one model.
+
+**D-16 — Vision reuses `qwen3.8:27b` rather than a separate VL model.**
+Alternatives: keep `qwen3-vl:8b-instruct-q8_0` loaded for images. Why: qwen3.8
+accepts image input, so page-image reasoning can use weights already resident
+for DEEP instead of a second model competing for a card that is already
+oversubscribed (§35). Revisit: if 27B offload makes visual queries unusably
+slow, the 8B VL model is the fallback.
+
+**D-17 — Phase 0 inspects the filesystem, not only running daemons.**
+Why: F-V3-05 — a model pulled via Unsloth belongs to no server until one
+starts, so a server-only probe reported it as absent and nearly drove the
+config to the wrong model. Weight scanning is bounded (depth, count, ≥100 MB)
+so it stays fast.
+
+**D-18 — Safety verification attributes changes instead of reporting any change.**
+Why: F-V3-03 — the operator's own services rewrite logs and heartbeats
+continuously, so "did anything change?" is unanswerable as a safety signal on
+a live machine. Attribution via the write journal makes `pass` mean what §84
+actually asks. `pass_strict` is retained so nothing is hidden.

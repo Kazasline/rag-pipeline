@@ -1,61 +1,80 @@
 # PROJECT_STATE — ALI RAG V3
 
-_Last update: 2026-08-16 (build session, remote Linux container)_
+_Last update: 2026-08-17, after the first on-machine Phase 0/1 run._
 
 ## Where we are
 
-**Phase 0–15 code: COMPLETE.  Phase 0–1 execution on the target machine: NOT
-STARTED.  Phases 16–19 (benchmark/review on real hardware): NOT STARTED.**
+```
+✅ PHASE 0-15   code built + 56 tests green
+✅ PHASE 0      EXECUTED on the target machine (2026-08-17)
+✅ PHASE 1      EXECUTED — 20,000-file pilot inventory of E:\
+🔄 PHASE 5-15   installed on the machine; pilot ingest + first queries pending
+⬜ PHASE 16     benchmark (needs a human-reviewed question set)
+⬜ PHASE 17-19  independent reviewer, fixes, regression
+⬜ PHASE 20     final docs with real numbers
+```
 
-The V3 system was designed and implemented in a cloud session that has access
-to this repository but **not** to the user's Windows PC, GPU, `E:\` drive, or
-local Qwen installation. Therefore:
+**No latency, recall or TTFT number has been measured yet.** `BENCHMARK.md`
+is deliberately empty of results and `alirag review` reports PENDING for every
+category lacking evidence.
 
-* Everything testable off-target has been tested for real: **49 pytest tests
-  green** covering router, chunking, sparse/dense/fusion, inventory safety,
-  duplicate + revision detection, project isolation, verifier honesty,
-  benchmark gating, cache invalidation, restart persistence.
-* **No latency, recall, TTFT or hardware number is claimed anywhere.** The
-  reviewer audit (`alirag review`) reports PENDING for every category that
-  requires on-machine evidence, by design.
+## Measured facts about the target machine (Phase 0, 2026-08-17)
 
-## Exact next step (do this first in the next session)
+| | |
+|---|---|
+| OS / CPU / RAM | Windows 11, Intel 20-core, 68.3 GB |
+| GPU | RTX 5080, **16.3 GB VRAM — only 4.7 GB free at inspection** |
+| CUDA / driver | 13.3 / 591.86 |
+| `E:\` | 1024 GB, 281 GB free, **662,244 files** |
+| Serving | **Ollama only.** No LM Studio, llama.cpp, vLLM or SGLang running |
+| Qdrant | not running → memmap dense backend auto-selected |
+| Python | 3.14.6; torch and docling **not** installed |
+| Parsers present | PyMuPDF, openpyxl, python-docx, python-pptx, pytesseract, PIL |
 
-1. On the Windows PC: `cd rag-pipeline && git pull`, install
-   `v3/requirements.txt` into the existing venv.
-2. `v3\run_phase0.bat` → read the report in `E:\ALI_RAG\17_REPORTS\`.
-   It detects the ACTUAL Qwen model/quantization/runtime and GPU/VRAM.
-3. Write `E:\ALI_RAG\01_CONFIG\config.yaml` from the report: `llm.base_url`,
-   `llm.model`, `llm.reasoning_param_style` (verify against the chosen
-   backend's docs — §34).
-4. `alirag safety snapshot` → `run_phase1_inventory.bat` → `alirag safety
-   verify` (must pass) → review the organization report before any ingestion.
-5. Pilot-ingest 500 files, spot-check retrieval, then full ingestion.
+Inventory pilot (first 20,000 files): 173 s, 2,966 exact duplicates tagged,
+76 revision families linked, 0 errors. Full inventory therefore ≈ 95 min.
 
-## Key facts a future session must not re-derive
+## Model decision
 
-* Primary answer model: the prompt names "Qwen3.8-27B"; the REAL installed
-  model/quant must come from Phase 0 — config deliberately ships with
-  `model: UNVERIFIED-set-after-phase0-inspection`.
-* Embeddings: bge-m3 @1024 via local Ollama (V1-proven, EN+MS). `hash`
-  provider exists for offline tests only.
-* Dense backend: Qdrant if reachable, else memmap fallback (also the §86
-  baseline). Backend visible in `/status`.
-* V1 (repo root) stays untouched and in production for WhatsApp/OpenClaw
-  queries; V3 is additive under `v3/`.
-* V1 hard lessons already baked in: index must NOT live on a cloud-synced
-  drive (pCloud corrupted it twice); page renders pixel-budgeted; poison-list
-  pattern for hanging parsers; single-writer ingest.
-* Workspace layout = numbered folders under `E:\ALI_RAG` (spec §5), created
-  on demand by `Config.dir()`.
+The brief's `Qwen3.8-27B` **does exist** as Ollama `qwen3.8:27b` (18 GB, 256K
+context, text+image). It was absent from the machine at inspection; the user
+is pulling it. Config `v3/config.kazasline.yaml` targets:
 
-## Unresolved / waiting on hardware
+* FAST → `qwen3.5:9b` (fits VRAM, keeps `cepat:` fast)
+* DEEP / FULLSWING / vision → `qwen3.8:27b`
 
-* Qwen serving backend choice (LM Studio vs llama.cpp vs vLLM on Windows) — §33 benchmark.
-* Whether Qdrant earns its service overhead vs memmap at real corpus scale — §18/§86.
-* Reranker: cross-encoder candidates only if latency is paid back (§37); the
-  shipped lexical-overlap rerank is a placeholder signal, not the final answer.
-* Visual retrieval: page images are rendered at ingest (`--render`); ColPali/
-  ColQwen-style visual embedding is an evaluation task (§20) — NOT shipped as
-  a claim. `10_VISUAL_INDEX` reserved.
-* FAST TTFT target (<1s p50) feasibility on the real GPU — measure, §10/§88.
+**Hardware limit, stated not hidden (§88):** 18 GB weights exceed 16.3 GB VRAM
+even when empty, so DEEP/FULLSWING offload to CPU and TTFT will run to
+seconds. The §10 sub-second FAST objective is only reachable on the 9B path.
+The per-mode split carries a model-swap cost that must be benchmarked before
+being trusted.
+
+## Exact next step
+
+1. On the PC: `cd C:\rag-pipeline; git pull; & "C:\rag-pipeline\v3\GO_V3.bat"`
+   — pulls the model, re-inspects, incremental inventory, **300-file pilot
+   ingest**, then three real queries + safety verify + metrics.
+2. Send the generated `ALIRAG_RUN_REPORT.txt` back.
+3. Read from it: `safety verify.pass`, real FAST/DEEP latency, the
+   `unsupported_extensions` breakdown, and `local_model_files` (what the
+   Unsloth download actually is).
+4. Then: full inventory + full ingest, `bench make` → human review → `bench
+   run`, and finally the independent reviewer pass.
+
+## Open questions waiting on data
+
+* What are the 10,735 `unsupported` files in the pilot? (extension breakdown
+  now in the organization report — review before full indexing, §64)
+* What is holding 11.5 GB of VRAM? Freeing it materially changes DEEP latency.
+* What format are the Unsloth weights, and is a second serving path (llama.cpp
+  / vLLM under WSL2) worth benchmarking against Ollama (§33)?
+* Do the per-mode models beat one resident model once swap cost is measured?
+
+## Things a new session must not re-derive
+
+* V1 at the repo root stays untouched and in production; V3 is additive.
+* Never place the index on a cloud-synced drive (V1 corruption, F-V1-01).
+* `hermes` and `sci_ai_library` on `E:\` are live services, not knowledge —
+  they are excluded from indexing and their log writes are expected.
+* Benchmarks refuse unreviewed question sets by design; the reviewer audit
+  cannot emit PASS without artifacts. Do not weaken either to look finished.

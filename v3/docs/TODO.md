@@ -3,9 +3,9 @@
 Legend: [x] done+verified · [~] code done, on-machine execution pending · [ ] open
 
 - [x] PHASE 0 code — read-only machine inspector (`inspect_machine.py`)
-- [~] PHASE 0 run — execute on the Windows PC; record Qwen model/quant/runtime
+- [x] PHASE 0 run — executed 2026-08-17: RTX 5080/16GB, Ollama-only, 662k files
 - [x] PHASE 1 code — read-only inventory/manifest
-- [~] PHASE 1 run — E:\ inventory + organization report + safety verify
+- [x] PHASE 1 run — 20k-file pilot inventory done; full pass (~95 min) pending
 - [x] PHASE 2 — technical research folded into DECISIONS.md (verify currency
       of Qdrant/vLLM/LM Studio/ColPali on-machine before final choices, §48/§97)
 - [x] PHASE 3 — architecture (ARCHITECTURE.md)
@@ -31,11 +31,22 @@ Legend: [x] done+verified · [~] code done, on-machine execution pending · [ ] 
 
 ## Non-phase items
 
-- [ ] Decide Qwen serving backend from §33 measurements
-- [ ] Verify `reasoning_param_style` against chosen backend docs (§34)
+- [~] Serving backend: Ollama in use; llama.cpp/vLLM-under-WSL2 still unbenchmarked (§33)
+- [ ] Verify `ollama_think` reasoning param against the installed Ollama version (§34)
 - [ ] Evaluate Qdrant vs memmap at real scale (§18/§86)
 - [ ] Evaluate cross-encoder reranker (§37) and ColPali-style visual retrieval (§20)
 - [ ] Tune retrieval policies (candidate counts) from benchmark (§9/§13)
 - [ ] Multimodal §83 acceptance test with real drawings
 - [ ] DWG→DXF/PDF read-only export path for CAD sheets (§24; needs AutoCAD/ODA on-machine)
 - [ ] Optional: nightly incremental ingest task (mirror V1's watchdog pattern)
+
+## Added after the first on-machine run (2026-08-17)
+
+- [x] Inspector must scan disk for weights, not just query servers (F-V3-05)
+- [x] Safety verify must attribute changes to RAG vs external writers (F-V3-03)
+- [x] Document-type inference must use word boundaries (F-V3-04)
+- [x] One-click bootstrap (`SETUP_V3.bat`) and run-through (`GO_V3.bat`)
+- [ ] Pilot ingest + first real queries (script ready, awaiting run)
+- [ ] Review the 10,735 `unsupported` files before full indexing (§64)
+- [ ] Investigate the 11.5 GB of VRAM held at inspection time
+- [ ] Wire page images into the vision path now that qwen3.8 accepts images (§21)
