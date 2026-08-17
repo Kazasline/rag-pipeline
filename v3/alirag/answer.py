@@ -166,8 +166,21 @@ class Engine:
                     f"{r.cleaned_query} {seeds}", policy, trace,
                     project=r.project_hint, exact_ids=r.exact_ids)
                 known = {h["chunk_id"] for h in verdict.kept}
-                verdict.kept.extend(h for h in extra if h["chunk_id"] not in known)
+                combined = verdict.kept + [h for h in extra
+                                           if h["chunk_id"] not in known]
+                # Re-verify the COMBINED set (round-2 reviewer N8).
+                #
+                # The second pass used to extend verdict.kept after verify()
+                # had already returned, so its results were cited and packed
+                # into the prompt having passed no project check, no superseded
+                # disclosure and no conflict surfacing — the checks were run on
+                # a strict subset of the evidence actually used.
+                verdict = verify(combined, project_hint=r.project_hint,
+                                 query=r.cleaned_query,
+                                 cross_project=r.cross_project)
                 trace.set("second_pass", True)
+                trace.set("evidence_status", verdict.status)
+                trace.set("verifier_flags", verdict.flags)
 
         resp = self._answer(r, verdict, trace, use_llm=use_llm)
         resp["_fingerprint"] = fp

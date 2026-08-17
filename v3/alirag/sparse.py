@@ -17,6 +17,8 @@ import re
 import sqlite3
 from pathlib import Path
 
+from .terms import STOPWORDS
+
 # doc/drawing/clause codes: letters+digits joined by - _ / .  (min 2 chars each side)
 ID_RE = re.compile(
     r"\b([A-Za-z]{1,10}(?:[-_/][A-Za-z0-9]{1,12}){1,6}|[A-Za-z]{1,6}\d{1,6}[A-Za-z]?|"
@@ -104,12 +106,24 @@ class SparseIndex:
     # ------------------------------------------------------------ read
     @staticmethod
     def _fts_query(query: str) -> str:
-        """Escape a free-text query into an FTS5 OR-of-terms expression."""
-        toks = re.findall(r"[^\s\"'()*:^]+", query)
-        toks = [t for t in toks if t]
-        if not toks:
+        r"""Escape a free-text query into an FTS5 OR-of-terms expression.
+
+        Stopwords are dropped first. This is an OR, so every retained token can
+        pull in documents on its own: leaving `the` in meant a question about a
+        pump warranty matched documents whose only commonality was the word
+        "the", and the sparse leg reported a lexical match on them (§39).
+
+        Short/symbolic tokens that are not stopwords are kept — codes like
+        `L-201` and units like `50mm` are exactly what this leg is for.
+        """
+        toks = [t for t in re.findall(r"[^\s\"'()*:^]+", query) if t]
+        content = [t for t in toks if t.lower().strip(".,;:!?") not in STOPWORDS]
+        # If the query is nothing BUT stopwords there is no topical term to
+        # search for. Falling back to the raw tokens would match the whole
+        # corpus, so the honest result is no lexical hits at all.
+        if not content:
             return '""'
-        return " OR ".join(f'"{t}"' for t in toks[:24])
+        return " OR ".join(f'"{t}"' for t in content[:24])
 
     def search(self, query: str, k: int = 20,
                project: str | None = None) -> list[dict]:

@@ -73,6 +73,48 @@ def cfg(tmp_path: Path, corpus: Path) -> Config:
     return c
 
 
+# Five DISTINCT validated questions over the fixture corpus.
+#
+# The benchmark harness refuses fewer than MIN_DISTINCT_QUESTIONS and refuses
+# duplicates outright (round-2 reviewer N5: 25 copies of one question satisfied
+# every honesty gate, including "percentiles_meaningful"). Tests that need a
+# successful benchmark run share this set rather than each inventing a
+# too-small one.
+BENCH_QUESTIONS = [
+    {"q": "which document is the LAI-003 turf instruction?",
+     "expect_file": "LAI-003 turf instruction.txt", "kind": "exact",
+     "mode": "", "project": "Dawson", "reviewed": True},
+    {"q": "what trunk diameter is required for the rain trees?",
+     "expect_file": "Landscape Tender Spec R01.txt", "kind": "semantic",
+     "mode": "", "project": "Dawson", "reviewed": True},
+    {"q": "what does the Meridian spec require for Ficus microcarpa?",
+     "expect_file": "Landscape Spec.txt", "kind": "semantic",
+     "mode": "", "project": "Meridian", "reviewed": True},
+    {"q": "which grass replaces cow grass in the Zone B turf areas?",
+     "expect_file": "LAI-003 turf instruction.txt", "kind": "semantic",
+     "mode": "", "project": "Dawson", "reviewed": True},
+    {"q": "where is the root barrier detail specified for planter edges?",
+     "expect_file": "Landscape Tender Spec R01.txt", "kind": "semantic",
+     "mode": "", "project": "Dawson", "reviewed": True},
+]
+
+
+def write_questions(path, records=None):
+    """Write a JSONL question file (defaults to the shared validated set)."""
+    import json
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(json.dumps(r) for r in (records or BENCH_QUESTIONS)),
+        encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def bench_questions(tmp_path: Path) -> Path:
+    return write_questions(tmp_path / "questions.jsonl")
+
+
 @pytest.fixture()
 def ingested(cfg: Config):
     """Inventory + ingest the synthetic corpus; yields (cfg, manifest)."""

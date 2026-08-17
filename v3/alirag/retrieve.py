@@ -149,8 +149,17 @@ class Retriever:
             if not seeds:
                 seeds = [w for w in query.split() if len(w) > 3][:4]
             hood = self.graph.neighborhood(seeds, hops=policy.graph_hops)
+            # Scope BEFORE fusion (round-2 reviewer N4). The graph was the one
+            # leg with no project scoping: its hits entered RRF, occupied
+            # fused_k slots, and were only dropped afterwards. At corpus scale
+            # a project-scoped query could have its whole fusion window taken
+            # by foreign graph hits and then be truncated to nothing — the same
+            # filter-after-selection defect as F4, in the last leg that had it.
+            graph_ids = hood["chunk_ids"]
+            if allowed is not None:
+                graph_ids = [c for c in graph_ids if c in allowed]
             graph_hits = [{"chunk_id": cid, "score": 1.0, "source": "graph"}
-                          for cid in hood["chunk_ids"][:policy.sparse_k]]
+                          for cid in graph_ids[:policy.sparse_k]]
             trace.stage("graph_search", time.perf_counter() - t0,
                         {"hits": len(graph_hits), "edges": len(hood["edges"])})
             if graph_hits:

@@ -287,6 +287,15 @@ and a query with no content terms at all can no longer pass on the "nothing to
 match" branch. RESULT: `test_relevance_floor_rejects_an_off_corpus_question`,
 `test_relevance_floor_still_accepts_genuine_matches`.
 LESSON: a guard whose threshold is "any token" is not a threshold.
+CORRECTION (round-2 audit): this entry was WRONG to present the case as closed.
+The reviewer reproduced the identical pump/rain-tree fabrication against the
+"fixed" code. The floor was waived entirely whenever the sparse leg returned
+rows, and the FTS expression ORs every token with no stopword removal, so a
+document sharing only `the` produced a "lexical match". Both tests named above
+used `sources=["dense"]`, and a third test explicitly asserted that a sparse
+hit passes on its own — the fix was optimized against the tests, not the
+defect. See F-V3-24. LESSON ON THE LESSON: a fix verified only through the
+path you were thinking about is not verified.
 
 **F-V3-17 / project isolation / three separate leaks (§60)** — (a)
 `retrieve.py` ended the project filter with `or hydrated`, restoring the
@@ -378,3 +387,43 @@ query text, still gets the merged answer it asked for. RESULT:
 `test_ambiguous_project_reply_is_not_cached`.
 LESSON: when a question has two correct answers, returning one of them with a
 warning is worse than returning neither. Ask.
+
+
+**F-V3-24 / grounding / the relevance floor was waived by any sparse hit** —
+SYMPTOM: the round-2 reviewer re-ran its round-1 attack, "What is the warranty
+period for the pump?", against a corpus containing neither, and got rain-tree
+and turf chunks back as supported evidence. ROOT CAUSE: two components
+disagreed about what a word is. `verify()` treated `sources` containing
+`sparse` as proof that a term had been matched, and `sparse._fts_query` built
+an OR of EVERY token with no stopword list — so `"warranty" OR "period" OR
+"for" OR "the" OR "pump"` matched documents whose only commonality was `the`,
+and the verifier waived its own floor on the strength of it. FIX: one shared
+stopword list and tokenizer (`terms.py`) used by both; the FTS expression drops
+stopwords and returns no lexical hits at all for an all-stopword query; and the
+verifier no longer accepts the retriever's label as evidence — only a
+*verified* exact-code match (the query contains a document code and the
+evidence carries that same normalized code) is a standalone pass, everything
+else must meet the content-overlap floor. RESULT:
+`test_relevance_floor_is_not_waived_by_a_sparse_hit` (asserts every leg
+combination), `test_exact_leg_label_alone_does_not_pass_the_floor`,
+`test_fts_query_drops_stopwords`; end-to-end the reviewer's query now returns
+INSUFFICIENT.
+LESSON: when two components must agree on a definition, give them ONE
+definition. Testing each against its own private notion of a word is how both
+pass while the system is wrong.
+
+**F-V3-25 / honesty / PROJECT_STATE claimed tests that did not exist** —
+SYMPTOM: the document stated "every finding is now fixed with a test that fails
+before the fix". The reviewer reverted each fix individually; for the three
+§60 project-isolation legs (F3a/b/c) the full suite stayed green. ROOT CAUSE:
+the fixes were real, but the claim about their verification was written from
+intent rather than from a revert run. This is §79 exactly — a claim from an
+attempt — and the builder wrote it about the builder's own work, which is the
+case §51 exists for. FIX: `tests/test_isolation_regressions.py` builds each
+leak condition directly (the 5-file fixture cannot reach any of them), and the
+revert matrix is now run per-fix before any such claim is written. The sentence
+in PROJECT_STATE.md has been replaced with the correction rather than quietly
+deleted.
+LESSON: "I fixed it and the tests pass" and "the tests would have caught it"
+are different claims. Only the second one needs the revert, and only the second
+one was being made.

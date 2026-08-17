@@ -45,4 +45,10 @@ retest result — in `docs/FAILURES.md`. Builder fixes, Reviewer re-runs.
 
 | date | reviewer | scope | verdict | notes |
 |---|---|---|---|---|
-| _none yet — no on-machine review has occurred_ | | | | |
+| 2026-08-17 | round 1 (independent agent session) | **FAIL** | DATA_SAFETY, GROUNDING, TEST_COVERAGE | safety verification was unfalsifiable; relevance floor accepted any shared token; three §60 isolation leaks; benchmark gates bypassable |
+| 2026-08-17 | round 2 (independent agent session) | **FAIL** | RETRIEVAL_QUALITY, GROUNDING/CITATIONS, TEST_COVERAGE, DOCUMENTATION_HONESTY | relevance floor still bypassable via the sparse leg; UNKNOWN-project evidence merged silently; second-pass evidence unverified; benchmark artifacts selectable by filename; PROJECT_STATE claimed tests that did not exist |
+| _pending_ | round 3 | — | — | round-2 fixes in; awaiting re-audit. **No sign-off has been issued.** |
+
+Neither audit was run on the target machine — both were code-and-artifact
+audits in a separate agent session. The on-machine acceptance run (§84–§86
+evidence artifacts) is still outstanding, and no category can pass without it.

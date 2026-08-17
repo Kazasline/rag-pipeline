@@ -6,19 +6,29 @@ fix pass that followed it._
 ## Where we are
 
 ```
-✅ PHASE 0-15   code built + 118 tests green
+✅ PHASE 0-15   code built + 139 tests green
 ✅ PHASE 0      EXECUTED on the target machine (2026-08-17)
 ✅ PHASE 1      EXECUTED — 20,000-file pilot inventory of E:\
 ✅ PHASE 5-15   installed; 313 files ingested, first grounded answers returned
 ⬜ PHASE 16     benchmark (needs a human-reviewed question set)
-🔄 PHASE 17-19  independent reviewer ran and FAILED 3 of 6 categories;
-                every finding is now fixed with a test that fails before the
-                fix. Re-audit pending — the reviewer, not the builder, decides.
+🔄 PHASE 17-19  independent reviewer has run TWICE and FAILED both times
+                (round 1: 3 of 6 categories; round 2: 4 of 6). Round-2 fixes
+                are in. Round 3 pending — the reviewer, not the builder,
+                decides when this is done.
 ⬜ PHASE 20     final docs with real numbers
 ```
 
-**Nothing here is signed off.** The builder cannot self-certify (§51); the
-reviewer's first verdict was FAIL and the second has not been issued.
+**Nothing here is signed off.** The builder cannot self-certify (§51). Two
+audits, two FAILs.
+
+Round 2 also caught this document lying. It previously read "every finding is
+now fixed with a test that fails before the fix" — the reviewer reverted each
+fix in turn and the suite stayed green for three of them, proving the claim
+false. That is exactly the §79 claim-from-attempt the spec forbids, and it was
+written here by the builder about the builder's own work. The tests now exist
+(`tests/test_isolation_regressions.py`), and the revert matrix was re-run
+per-fix before this sentence was written. Treat any summary in this file as a
+claim to check, not a result — the reviewer's report is the record.
 
 **Measured so far:** per-stage query latency from real traces on the target
 machine (see `BENCHMARK.md`), and end-to-end answers on 313 ingested files.

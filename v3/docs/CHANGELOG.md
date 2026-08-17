@@ -40,3 +40,47 @@
 * `SETUP_V3.bat` (bootstrap) and `GO_V3.bat` (pull → pilot ingest → real
   queries → metrics) added for one-command operation on Windows.
 * Test suite 49 → 56.
+
+
+## 2026-08-17 (later) — two independent reviewer audits and the fixes they forced
+
+The independent reviewer (§47–§51) ran twice and FAILED both times. Neither
+verdict is softened here; the findings are recorded in `FAILURES.md` as
+F-V3-15..25 and the state of play is in `PROJECT_STATE.md`.
+
+**Round 1 — FAIL, 3 of 6 categories.**
+* `safety.py` rebuilt: the old model asked "can we prove WE didn't do it",
+  which passed whenever it had no records. Snapshots now carry content hashes,
+  every difference is classified rag-attributable / operator-declared /
+  UNEXPLAINED, renames reconcile by hash, and the verdict fails on anything
+  unaccounted for. `pass_strict` is gone.
+* Relevance floor, project isolation (three separate leaks), dense filtering
+  before top-k, graph ranking by hop distance instead of ingestion order, LIKE
+  escaping, benchmark honesty gates, cache invalidation on code/model/prompt
+  change.
+
+**Round 2 — FAIL, 4 of 6 categories.** The round-1 fixes held under the
+reviewer's revert matrix except where noted:
+* Relevance floor was still bypassable — any sparse hit waived it, and the FTS
+  query ORed every token including stopwords. One shared stopword list and
+  tokenizer (`terms.py`) now serves both; only a *verified* exact-code match is
+  a standalone pass (F-V3-24).
+* Multi-project questions are asked, not merged; UNKNOWN-project evidence is
+  disclosed and caps the status at PARTIAL rather than merging silently.
+* FULLSWING's second pass is re-verified over the combined evidence — it used
+  to extend the kept set after the verifier had already run.
+* Graph leg scoped before fusion (the last leg filtering after selection).
+* The HTTP API had never worked: deferred annotations made FastAPI treat the
+  request body as a query parameter, so every POST returned 422. Found only
+  because the reviewer failed TEST_COVERAGE for `api.py` having no tests.
+* Revision families now link across `SUPERSEDED\` subfolders.
+* Benchmark: duplicate questions rejected, minimum distinct-question count,
+  minimum sample on the quality/citation gates, and artifact selection by
+  recorded time and report kind rather than by filename.
+* Volatile-path declarations reachable from config and echoed into the safety
+  report, so the §84 gate can be satisfied honestly and the excuse reviewed.
+* `PROJECT_STATE.md` claimed every finding had a failing-before test; three
+  did not. Corrected, and the tests written (F-V3-25).
+
+Test suite 56 → 139. Every fix above was re-run with the fix reverted to
+confirm its test goes red.

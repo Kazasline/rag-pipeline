@@ -106,11 +106,20 @@ starts, so a server-only probe reported it as absent and nearly drove the
 config to the wrong model. Weight scanning is bounded (depth, count, ≥100 MB)
 so it stays fast.
 
-**D-18 — Safety verification attributes changes instead of reporting any change.**
-Why: F-V3-03 — the operator's own services rewrite logs and heartbeats
-continuously, so "did anything change?" is unanswerable as a safety signal on
-a live machine. Attribution via the write journal makes `pass` mean what §84
-actually asks. `pass_strict` is retained so nothing is hidden.
+**D-18 — Safety verification accounts for every change; it does not merely
+attribute the ones it recorded.** SUPERSEDED IN PART by the round-1 reviewer.
+The original decision made `pass` mean "no change is attributable to us via the
+write journal", with `pass_strict` retained as the any-change view. That is
+unfalsifiable: with an empty journal nothing is attributable, so an untouched
+system and a system whose journal failed to record look identical, and a
+deletion by anything other than this code passed. The verdict now asks the
+opposite question — can every difference be ACCOUNTED for? — and fails on any
+change that is rag-attributable OR unexplained. Only patterns the operator
+declared volatile in advance (`volatile_patterns`, echoed into the report) are
+excused, and renames are reconciled by content hash rather than read as
+deletions. `pass_strict` no longer exists. The live-service problem that
+motivated the original decision is handled by the declaration, which is
+reviewable, instead of by a blanket excuse, which was not.
 
 **D-19 — Talk to Ollama through its native `/api/chat`, not the `/v1` shim.**
 Alternatives: stay on the OpenAI path and raise token budgets; append a

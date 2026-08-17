@@ -50,3 +50,17 @@ Legend: [x] done+verified · [~] code done, on-machine execution pending · [ ] 
 - [ ] Review the 10,735 `unsupported` files before full indexing (§64)
 - [ ] Investigate the 11.5 GB of VRAM held at inspection time
 - [ ] Wire page images into the vision path now that qwen3.8 accepts images (§21)
+
+
+## Deferred with conditions (round-2 reviewer, accepted as recorded)
+
+- [ ] **N10 — Qdrant payload sync. MUST be fixed before Qdrant is ever
+      enabled.** `inventory.reinfer_metadata` syncs corrected project labels
+      into the FTS index but not into Qdrant payloads. `dense.backend` defaults
+      to `auto`, so merely starting a Qdrant server silently switches the
+      backend, and its project filter would then run against pre-correction
+      labels — the F3(c) defect, unfixed on the other backend. Either sync
+      payloads on re-inference or refuse to auto-select Qdrant when the
+      manifest has been re-inferred since the last full ingest.
+- [x] N11 — `/explain` leaked the internal cache fingerprint; `/query` already
+      stripped it. Fixed with a test.

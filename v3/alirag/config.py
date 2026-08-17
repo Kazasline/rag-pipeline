@@ -207,6 +207,18 @@ class Config:
                                                     for k, v in DEFAULT_POLICIES.items()})
     api_host: str = "127.0.0.1"          # localhost-only by default (§52)
     api_port: int = 8642
+    # Path patterns (fnmatch) whose changes the OPERATOR declares expected —
+    # live services rewriting their own logs/locks/state under a source root.
+    #
+    # Empty by default and deliberately awkward to fill: every entry is an
+    # excuse the §84 verdict will accept, so each one is echoed into the
+    # safety report for the reviewer to rule on. Never point one at a folder
+    # containing documents. Round-2 reviewer N9: the mechanism existed in
+    # SafetyGuard but nothing outside the tests could reach it, so on the
+    # target machine `safety verify` could only ever report pass:false — a
+    # gate that cannot be satisfied honestly invites being satisfied
+    # dishonestly.
+    volatile_patterns: list = field(default_factory=list)
 
     # ---------------------------------------------------------------- paths
     def dir(self, key: str) -> Path:
@@ -255,7 +267,8 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     for cand in candidates:
         if cand.is_file() and yaml:
             data = yaml.safe_load(cand.read_text(encoding="utf-8")) or {}
-            for key in ("workspace", "source_roots", "api_host", "api_port"):
+            for key in ("workspace", "source_roots", "api_host", "api_port",
+                        "volatile_patterns"):
                 if key in data:
                     setattr(cfg, key, data[key])
             for section, cls in (("llm", LLMConfig), ("embed", EmbedConfig),

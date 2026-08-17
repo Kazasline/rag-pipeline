@@ -25,8 +25,32 @@ from .config import Config
 
 
 def _latest(pattern: str, folder: Path) -> Path | None:
-    hits = sorted(folder.glob(pattern))
-    return hits[-1] if hits else None
+    """Most RECENT matching artifact.
+
+    Round-2 reviewer N7: this used to be `sorted(glob)[-1]` — lexicographic by
+    filename. `compare_layers` writes report_baseline_dense_*, report_hybrid_*
+    and report_hybrid_graph_* into the same folder that `report_*.json` scans,
+    so a poor recent run was masked by an older, alphabetically-later artifact
+    and the audit certified evidence the operator never produced for it.
+
+    Recency is taken from `generated_at` inside the JSON where present (the
+    artifact's own claim about when it ran), falling back to mtime, and only
+    then to the name.
+    """
+    hits = list(folder.glob(pattern))
+    if not hits:
+        return None
+
+    def key(p: Path):
+        rec = _load_json(p) or {}
+        return (str(rec.get("generated_at") or ""), p.stat().st_mtime, p.name)
+
+    return sorted(hits, key=key)[-1]
+
+
+# A ratio over a handful of questions is not a measurement. The per-mode gates
+# already require 5; the corpus-wide quality gates required none at all.
+MIN_BENCH_QUESTIONS = 5
 
 
 def _load_json(path: Path | None) -> dict | None:
@@ -58,10 +82,24 @@ def audit(cfg: Config) -> dict:
 
     # DATA SAFETY — snapshot verification with 0 deleted / 0 modified (§84)
     safety = _load_json(_latest("safety_verify*.json", reports))
+    safety_detail = ("§84: snapshot re-scan accounts for every change; fails on any "
+                     "RAG-attributable or unexplained modification/deletion/move")
+    if safety:
+        # A pass earned by a broad allowlist is not the same as a clean run.
+        # The excuse in force must be visible next to the verdict, or the
+        # reviewer is signing off on a number without its caveat.
+        pats = safety.get("volatile_patterns") or []
+        excused = len(safety.get("allowlisted_modified") or []) + \
+            len(safety.get("allowlisted_deleted") or [])
+        safety_detail += (
+            f" — {len(pats)} operator-declared volatile pattern(s) excusing "
+            f"{excused} change(s)" + (f": {pats[:5]}" if pats else ""))
+        if not safety.get("hashed"):
+            safety_detail += (" — WARNING: snapshot has no content hashes, so "
+                              "same-size edits and renames are invisible")
     item("DATA_SAFETY", _latest("safety_verify*.json", reports),
-         None if safety is None else bool(safety.get("pass")),
-         "§84: snapshot re-scan accounts for every change; fails on any "
-         "RAG-attributable or unexplained modification/deletion/move")
+         None if safety is None else bool(safety.get("pass")) and bool(safety.get("hashed")),
+         safety_detail)
 
     # per-mode benchmarks (§80–§82)
     for mode in ("FAST", "DEEP", "FULLSWING"):
@@ -103,12 +141,39 @@ def audit(cfg: Config) -> dict:
     item("GRAPH", _latest("layer_compare*.json", bench_dir), ok,
          "§86: hybrid+graph does not regress hybrid; multi-hop gain documented")
 
-    # CITATIONS — from any benchmark with citation_page_accuracy measured
-    any_bench = _load_json(_latest("report_*.json", bench_dir))
-    item("CITATIONS", _latest("report_*.json", bench_dir),
-         None if not any_bench or any_bench.get("citation_page_accuracy") is None
-         else any_bench["citation_page_accuracy"] >= 0.7,
-         "§40/§45: cited page/location matches expectation on the benchmark")
+    # CITATIONS / RETRIEVAL_QUALITY are judged only on PER-MODE reports.
+    #
+    # `report_*.json` also matches the layer-comparison artifacts written by
+    # `compare_layers` (report_baseline_dense_*, report_hybrid_*), whose whole
+    # purpose is to run degraded configurations. Certifying retrieval quality
+    # from one of those measures the wrong thing (round-2 reviewer N7).
+    mode_reports = [p for m in ("fast", "deep", "fullswing")
+                    if (p := _latest(f"report_{m}*.json", bench_dir))]
+    graded = sorted(
+        (r for p in mode_reports if (r := _load_json(p)) is not None),
+        key=lambda r: str(r.get("generated_at") or ""))
+    any_bench = graded[-1] if graded else None
+    any_bench_path = mode_reports[-1] if mode_reports else None
+
+    def _enough(rep: dict | None) -> bool:
+        """A ratio needs a sample. Round-2 reviewer N6: a one-question report
+        with recall 1.0 and citation accuracy 1.0 passed both gates."""
+        return bool(rep) and rep.get("questions", 0) >= MIN_BENCH_QUESTIONS
+
+    cit_ok = None
+    cit_detail = "§40/§45: cited page/location matches expectation on the benchmark"
+    if any_bench:
+        if not _enough(any_bench):
+            cit_ok = False
+            cit_detail += (f" — only {any_bench.get('questions', 0)} question(s); "
+                           f"needs >= {MIN_BENCH_QUESTIONS}")
+        elif any_bench.get("citation_page_accuracy") is None:
+            cit_ok = False
+            cit_detail += " — citation_page_accuracy was never measured (no expect_page set)"
+        else:
+            cit_ok = any_bench["citation_page_accuracy"] >= 0.7
+            cit_detail += f" — {any_bench['citation_page_accuracy']}"
+    item("CITATIONS", any_bench_path, cit_ok, cit_detail)
 
     # RESTART — §85 restart test report
     rs = _load_json(_latest("restart_test*.json", reports))
@@ -134,12 +199,20 @@ def audit(cfg: Config) -> dict:
 
     # RETRIEVAL QUALITY — recall/MRR thresholds on validated question set (§44)
     ok = None
+    detail = ("§44: Recall@10 ≥ 0.6 and MRR ≥ 0.4 on the validated benchmark "
+              "(thresholds to be re-tuned against the real corpus)")
     if any_bench:
-        ok = (any_bench.get("recall", {}).get("@10", 0) >= 0.6
-              and any_bench.get("mrr", 0) >= 0.4)
-    item("RETRIEVAL_QUALITY", _latest("report_*.json", bench_dir), ok,
-         "§44: Recall@10 ≥ 0.6 and MRR ≥ 0.4 on the validated benchmark "
-         "(thresholds to be re-tuned against the real corpus)")
+        if not _enough(any_bench):
+            ok = False
+            detail += (f" — only {any_bench.get('questions', 0)} question(s); "
+                       f"needs >= {MIN_BENCH_QUESTIONS}")
+        else:
+            ok = (any_bench.get("recall", {}).get("@10", 0) >= 0.6
+                  and any_bench.get("mrr", 0) >= 0.4)
+            detail += (f" — recall@10={any_bench.get('recall', {}).get('@10')}, "
+                       f"mrr={any_bench.get('mrr')} over "
+                       f"{any_bench.get('questions')} questions")
+    item("RETRIEVAL_QUALITY", any_bench_path, ok, detail)
 
     overall = ("PASS" if all(v["status"] == "PASS" for v in items.values())
                else "FAIL" if any(v["status"] == "FAIL" for v in items.values())

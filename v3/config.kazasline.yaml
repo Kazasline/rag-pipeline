@@ -126,6 +126,21 @@ ingest:
     - build
     - _gzip
 
+# Paths whose changes the OPERATOR declares expected (§84).
+#
+# These are live services on E:\ that rewrite their own state continuously —
+# NOT document folders. Excluding them from indexing is not enough: the safety
+# walk covers every source file, so without these declarations `safety verify`
+# reports pass:false for heartbeats nobody touched, and a gate that can never
+# legitimately go green is a gate the operator learns to ignore.
+#
+# Every entry is an excuse the §84 verdict will accept, and every excused
+# change is listed under allowlisted_* in the report for the reviewer to rule
+# on. Never point one at a folder containing project documents.
+volatile_patterns:
+  - "*/hermes/*"
+  - "*/sci_ai_library/*"
+
 api:
   host: 127.0.0.1
   port: 8642

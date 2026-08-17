@@ -27,34 +27,27 @@ MONEY_RE = re.compile(r"(?:RM|MYR|\$)\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE)
 # is coincidence at corpus scale.
 MIN_CONTENT_OVERLAP = 2
 
-# Function words carry no topical signal, in either language this corpus uses.
-# Without this list the floor was satisfied by "the", "for", "what", "yang".
-STOPWORDS = {
-    # English
-    "the", "and", "for", "are", "was", "were", "with", "this", "that", "from",
-    "have", "has", "had", "not", "but", "you", "your", "our", "their", "its",
-    "what", "which", "who", "whom", "when", "where", "why", "how", "all", "any",
-    "can", "will", "would", "should", "could", "there", "here", "than", "then",
-    "into", "onto", "out", "off", "over", "under", "about", "been", "being",
-    "does", "did", "done", "get", "got", "per", "via", "such", "some", "each",
-    "more", "most", "other", "only", "own", "same", "too", "very", "just",
-    # Malay
-    "yang", "dan", "untuk", "adalah", "ialah", "dengan", "ini", "itu", "dari",
-    "daripada", "pada", "ada", "tidak", "tak", "atau", "juga", "akan", "boleh",
-    "apa", "mana", "siapa", "bila", "kenapa", "mengapa", "bagaimana", "semua",
-    "saya", "anda", "kita", "kami", "mereka", "dalam", "oleh", "kepada",
-    "sebagai", "telah", "sudah", "masih", "lagi", "sahaja", "cari", "berapa",
-    "jumlah", "senarai",
-}
+# The stopword list and tokenizer are SHARED with the lexical index (terms.py).
+# They disagreed before, and the disagreement was the whole defect.
+from .sparse import harvest_ids, normalize_id  # noqa: E402
+from .terms import STOPWORDS, content_terms  # noqa: E402,F401
+
+_content_terms = content_terms   # retained: referenced by existing tests
 
 
-def _content_terms(text: str) -> set:
-    """Topical terms only: alphanumeric tokens of 3+ chars, minus stopwords.
+def _carries_code(evidence: dict, query: str) -> bool:
+    """True when a document code present in the QUERY is also present in the
+    EVIDENCE (filename or text), compared on normalized form.
 
-    Codes like `LAI-003` survive because the pattern keeps internal hyphens.
+    This is what makes an exact-leg hit self-justifying. Trusting the leg's
+    label instead would mean the verifier certifies whatever the retriever
+    claims — and the retriever is one of the things it exists to check.
     """
-    toks = re.findall(r"[A-Za-z0-9][\w\-]{2,}", text.lower())
-    return {t for t in toks if t not in STOPWORDS}
+    qcodes = {normalize_id(c) for c in harvest_ids(query, limit=8)}
+    if not qcodes:
+        return False
+    hay = f"{evidence.get('filename', '')} {evidence.get('text', '')}"
+    return bool(qcodes & {normalize_id(c) for c in harvest_ids(hay, limit=60)})
 
 
 @dataclass
@@ -93,22 +86,35 @@ def verify(evidence: list[dict], project_hint: str | None = None,
     # prefers a refusal to a fabrication, and DEEP is the sanctioned escalation
     # (§16). Retune against the benchmark, not by intuition.
     if query:
-        qterms = _content_terms(query)
-        lexical_hit = any(set(e.get("sources", [])) & {"exact", "sparse"}
-                          for e in kept)
+        qterms = content_terms(query)
         best_overlap = 0
         if qterms:
             for e in kept:
-                overlap = len(qterms & _content_terms(e.get("text", "")))
+                overlap = len(qterms & content_terms(e.get("text", "")))
                 best_overlap = max(best_overlap, overlap)
         # A query with NO content terms ("the", "apa yang ada dalam ini?") has
         # nothing to match on, so dense neighbours cannot be evidence for it
         # either — that must not count as passing the floor.
         enough_overlap = bool(qterms) and best_overlap >= MIN_CONTENT_OVERLAP
-        if not lexical_hit and not enough_overlap:
+
+        # An exact-ID hit is the ONE standalone pass, and only when verified
+        # here rather than taken on trust: the query must contain a document
+        # code and the evidence must actually carry that same normalized code.
+        # "Find LAI-003" is legitimately answered by one term.
+        #
+        # A SPARSE hit grants nothing on its own. It used to: `lexical_hit`
+        # meant "the sparse leg returned rows", and since the FTS expression
+        # ORs every token, a document matching only `the` satisfied the floor
+        # and an off-corpus question came back SUPPORTED. Stopwords are now
+        # stripped from the FTS query too, but the verifier must not depend on
+        # the retriever's tokenizer being right — it checks the terms itself.
+        exact_hit = any("exact" in (e.get("sources") or []) and _carries_code(e, query)
+                        for e in kept)
+
+        if not exact_hit and not enough_overlap:
             return Verdict("INSUFFICIENT", kept,
-                           [f"no lexical match and only {best_overlap} content "
-                            f"term(s) shared with the query (need "
+                           [f"no verified exact-code match and only {best_overlap} "
+                            f"content term(s) shared with the query (need "
                             f"{MIN_CONTENT_OVERLAP}) — the retrieved items are "
                             "nearest neighbours, not evidence"], [])
 
@@ -140,6 +146,35 @@ def verify(evidence: list[dict], project_hint: str | None = None,
         else:
             flags.append(f"evidence spans multiple projects: {sorted(projects)}"
                          " — answering would mix them; asking which one instead")
+
+    # ---- unattributed evidence (§4, §60)
+    #
+    # A file whose project could not be inferred is not "no objection" — it is
+    # a file that MIGHT belong to any project, including one the reader would
+    # not accept an answer from. Round-2 reviewer N3: this set was built with
+    # `!= "UNKNOWN"`, so unattributed evidence merged silently with a named
+    # project, and an all-UNKNOWN evidence set was reported SUPPORTED with no
+    # flags at all. On this corpus that is the common case, not the edge case
+    # (43,897 of ~45,000 inventoried files are UNKNOWN).
+    #
+    # Deliberate trade-off, stated so it can be overruled: unattributed
+    # evidence is DISCLOSED and caps the status at PARTIAL, rather than
+    # triggering the clarification question. Treating it as ambiguity would
+    # make almost every query on this corpus unanswerable, which would push
+    # the operator to disable the check — a guard nobody can live with is a
+    # guard that gets removed. Once project inference covers most of the
+    # corpus, revisit and consider promoting this to AMBIGUOUS_PROJECT.
+    unattributed = [e for e in kept
+                    if not e.get("project") or e.get("project") == "UNKNOWN"]
+    if unattributed:
+        names = sorted({e.get("filename", "?") for e in unattributed})
+        flags.append(
+            f"{len(unattributed)} of {len(kept)} evidence item(s) have NO known "
+            f"project and cannot be attributed: {', '.join(names[:5])}"
+            + (" …" if len(names) > 5 else "")
+            + (" — they may belong to a different project than the one asked "
+               "about" if projects else
+               " — nothing in this answer is attributable to a project"))
 
     # ---- revision currency (§62)
     superseded = [e for e in kept if e.get("superseded_by")]
@@ -185,6 +220,10 @@ def verify(evidence: list[dict], project_hint: str | None = None,
                 grouped.setdefault(p, []).append(e)
         return Verdict("AMBIGUOUS_PROJECT", kept, flags, conflicts, grouped)
     status = "SUPPORTED"
-    if conflicts or any("cross-project question" in f for f in flags):
+    if (conflicts
+            or any("cross-project question" in f for f in flags)
+            # unattributed evidence must not read as fully supported (§4)
+            or any(e for e in kept
+                   if not e.get("project") or e.get("project") == "UNKNOWN")):
         status = "PARTIAL"
     return Verdict(status, kept, flags, conflicts)

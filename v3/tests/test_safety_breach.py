@@ -196,9 +196,58 @@ def test_relevance_floor_still_accepts_genuine_matches():
            "superseded_by": None, "sources": ["dense"]}]
     assert verify(ev, query="root barrier planter detail").status != "INSUFFICIENT"
     assert verify(ev, query="Samanea saman planting").status != "INSUFFICIENT"
-    # a lexical-leg hit is sufficient on its own
-    lex = [{**ev[0], "sources": ["sparse"]}]
-    assert verify(lex, query="anything at all here").status != "INSUFFICIENT"
+    # An exact-code question is legitimately answered on one term — but only
+    # because the code is verified to be present in the evidence, not because
+    # the retriever labelled the hit "exact".
+    coded = [{**ev[0], "filename": "LAI-003 turf instruction.pdf",
+              "text": "LAI-003 replaces the turf specification.",
+              "sources": ["exact"]}]
+    assert verify(coded, query="find LAI-003").status != "INSUFFICIENT"
+
+
+def test_relevance_floor_is_not_waived_by_a_sparse_hit():
+    """Round-2 reviewer N1. The FTS expression ORs every token, so a document
+    sharing only a stopword comes back from the sparse leg. Reading that as
+    "a term was matched" waived the floor and reproduced the fabrication: an
+    off-corpus question answered from rain-tree chunks."""
+    from alirag.verify import verify
+    off_corpus = "What is the warranty period for the pump?"
+    body = ("Supply and plant Samanea saman rain trees with root barrier "
+            "along the planter edge.")
+    for legs in (["sparse"], ["exact"], ["sparse", "dense"],
+                 ["exact", "sparse", "dense"]):
+        ev = [{"chunk_id": 1, "text": body, "filename": "spec.pdf",
+               "project": "Dawson", "revision": "R01", "superseded_by": None,
+               "sources": legs}]
+        assert verify(ev, query=off_corpus).status == "INSUFFICIENT", \
+            f"off-corpus question passed the floor via legs={legs}"
+
+
+def test_exact_leg_label_alone_does_not_pass_the_floor():
+    """The verifier must check the code itself. If it trusts the leg's label,
+    it certifies whatever the retriever claims — and the retriever is one of
+    the things it exists to check."""
+    from alirag.verify import verify
+    ev = [{"chunk_id": 1, "text": "Rain trees and root barrier.",
+           "filename": "spec.pdf", "project": "Dawson", "revision": "R01",
+           "superseded_by": None, "sources": ["exact"]}]
+    # query carries a code; the evidence does not contain it
+    assert verify(ev, query="what does LAI-003 say?").status == "INSUFFICIENT"
+
+
+def test_fts_query_drops_stopwords():
+    """The other half of N1: an OR-of-terms query containing 'the' matches
+    documents that share nothing topical with the question."""
+    from alirag.sparse import SparseIndex
+    q = SparseIndex._fts_query("What is the warranty period for the pump?")
+    lowered = q.lower()
+    for stop in ('"the"', '"for"', '"is"', '"what"'):
+        assert stop not in lowered, f"{stop} survived into the FTS query: {q}"
+    assert '"warranty"' in q and "pump" in q
+    # codes and units are not stopwords and must survive
+    assert '"L-201"' in SparseIndex._fts_query("drawing L-201 zone B")
+    # a query of pure stopwords has no topical term to search for
+    assert SparseIndex._fts_query("what is the") == '""'
 
 
 # ---------------------------------------------------------------- reviewer: dense filter
@@ -275,10 +324,8 @@ def test_bench_refuses_a_mislabelled_run(ingested, tmp_path):
     from alirag.bench import BenchmarkError, run_retrieval_bench
     cfg, _ = ingested
     qf = tmp_path / "q.jsonl"
-    _write_questions(qf, [{"q": "why was the turf specification revised?",
-                           "expect_file": "LAI-003 turf instruction.txt",
-                           "project": "Dawson", "reviewed": True,
-                           "mode": "DEEP"}])
+    from conftest import BENCH_QUESTIONS
+    _write_questions(qf, [{**q, "mode": "DEEP"} for q in BENCH_QUESTIONS])
     try:
         run_retrieval_bench(cfg, qf, label="fast", use_llm=False)
         raise AssertionError("must refuse a FAST label on a DEEP run")
@@ -290,20 +337,14 @@ def test_bench_report_records_real_hardware_and_sample_size(ingested, tmp_path):
     from alirag.bench import run_retrieval_bench
     cfg, _ = ingested
     qf = tmp_path / "q.jsonl"
-    _write_questions(qf, [
-        {"q": "which document is the turf instruction?",
-         "expect_file": "LAI-003 turf instruction.txt",
-         "project": "Dawson", "reviewed": True},
-        {"q": "what does the tender say about rain trees?",
-         "expect_file": "Landscape Tender Spec R01.txt",
-         "project": "Dawson", "reviewed": True},
-    ])
+    from conftest import BENCH_QUESTIONS
+    _write_questions(qf, BENCH_QUESTIONS)
     rep = run_retrieval_bench(cfg, qf, label="adhoc", use_llm=False)
     assert isinstance(rep["machine"], dict)
     assert "gpu" in rep["machine"] and "ram" in rep["machine"]
     assert rep["wrong_project_measured"] == rep["questions"]
     assert rep["latency_ms"]["percentiles_meaningful"] is False, \
-        "n=2 must not be presented as a meaningful percentile"
+        "n=5 must not be presented as a meaningful percentile"
 
 
 # ---------------------------------------------------------------- reviewer F15

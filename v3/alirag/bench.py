@@ -119,6 +119,11 @@ def _validate_question(rec: dict, idx: int) -> None:
             "0.0 would silently satisfy the reviewer gate.")
 
 
+# A percentile needs independent samples. Re-running ONE question 25 times
+# measures the cache and the warm path, not a latency distribution.
+MIN_DISTINCT_QUESTIONS = 5
+
+
 def _load_questions(path: Path) -> list[dict]:
     qs = []
     with open(path, encoding="utf-8") as f:
@@ -135,6 +140,26 @@ def _load_questions(path: Path) -> list[dict]:
         raise BenchmarkError(
             f"no validated questions in {path} — a benchmark cannot be scored "
             "from an empty or unreviewed set (§43)")
+
+    # Round-2 reviewer N5: 25 copies of one question satisfied every honesty
+    # gate — n>=20 for meaningful percentiles, recall 1.0, wrong-project 0.0.
+    seen: dict[str, int] = {}
+    for rec in qs:
+        key = " ".join(rec["q"].lower().split())
+        seen[key] = seen.get(key, 0) + 1
+    dupes = {q: c for q, c in seen.items() if c > 1}
+    if dupes:
+        worst = max(dupes.items(), key=lambda kv: kv[1])
+        raise BenchmarkError(
+            f"{len(dupes)} question(s) appear more than once in {path} "
+            f"(worst: {worst[1]}x {worst[0][:60]!r}). Duplicates inflate the "
+            "sample count without adding information: percentiles computed "
+            "over repeats of one query measure the cache, not the workload.")
+    if len(qs) < MIN_DISTINCT_QUESTIONS:
+        raise BenchmarkError(
+            f"only {len(qs)} distinct question(s) in {path}; at least "
+            f"{MIN_DISTINCT_QUESTIONS} are needed before any score is "
+            "meaningful (§43/§44).")
     return qs
 
 

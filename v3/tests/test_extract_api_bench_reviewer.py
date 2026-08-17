@@ -158,22 +158,11 @@ def test_api_binds_localhost_by_default(ingested):
 
 
 # ------------------------------------------------------------------ bench.compare_layers
-QUESTIONS = [
-    {"q": "What trunk diameter is required for the rain tree?",
-     "expect_file": "Landscape Tender Spec R01.txt", "project": "Dawson",
-     "kind": "semantic", "mode": "FAST", "reviewed": True},
-    {"q": "Which instruction replaces the cow grass turf in Zone B?",
-     "expect_file": "LAI-003 turf instruction.txt", "project": "Dawson",
-     "kind": "exact", "mode": "FAST", "reviewed": True},
-]
-
-
 @pytest.fixture()
 def questions_file(tmp_path: Path) -> Path:
-    p = tmp_path / "questions.jsonl"
-    p.write_text("\n".join(json.dumps(q) for q in QUESTIONS) + "\n",
-                 encoding="utf-8")
-    return p
+    """The shared 5-question validated set — the harness refuses fewer."""
+    from conftest import write_questions
+    return write_questions(tmp_path / "questions.jsonl")
 
 
 def test_compare_layers_runs_each_layer_and_reports_separately(ingested,

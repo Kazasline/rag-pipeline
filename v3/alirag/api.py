@@ -64,6 +64,7 @@ def create_app(cfg: Config | None = None):
         """§41: same as /query but returns the full internal trace."""
         resp = engine.query(q.query, mode_override=q.mode, use_llm=q.use_llm,
                             use_cache=False)
+        resp.pop("_fingerprint", None)   # internal cache key, never published (§53)
         return resp
 
     @app.get("/metrics")

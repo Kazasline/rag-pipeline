@@ -62,25 +62,14 @@ def test_bench_refuses_unreviewed_template(ingested):
 
 def test_bench_real_run_produces_metrics(ingested):
     cfg, _ = ingested
-    qf = cfg.dir("benchmark") / "questions.jsonl"
-    # Every field the hardened gates require: a real question, a document-
-    # identifying expectation, an explicit project so the wrong-project rate is
-    # genuinely measured, and a human's reviewed flag.
-    qs = [
-        {"q": "which document is the LAI-003 turf instruction?",
-         "expect_file": "LAI-003 turf instruction.txt", "kind": "exact",
-         "mode": "", "project": "Dawson", "reviewed": True},
-        {"q": "what trunk diameter is required for the rain trees?",
-         "expect_file": "Landscape Tender Spec R01.txt",
-         "kind": "semantic", "mode": "", "project": "Dawson", "reviewed": True},
-        {"q": "what does the Meridian spec require for Ficus microcarpa?",
-         "expect_file": "Landscape Spec.txt",
-         "kind": "semantic", "mode": "", "project": "Meridian", "reviewed": True},
-    ]
-    qf.write_text("\n".join(json.dumps(q) for q in qs), encoding="utf-8")
+    from conftest import write_questions
+    # Shared validated set: 5 distinct questions, each with a real question, a
+    # document-identifying expectation, an explicit project so the
+    # wrong-project rate is genuinely measured, and a human's reviewed flag.
+    qf = write_questions(cfg.dir("benchmark") / "questions.jsonl")
     rep = run_retrieval_bench(cfg, qf, label="fast")
-    assert rep["questions"] == 3
+    assert rep["questions"] == 5
     assert 0.0 <= rep["recall"]["@5"] <= 1.0
-    assert rep["recall"]["@5"] >= 0.66      # exact + at least one semantic must hit
+    assert rep["recall"]["@5"] >= 0.6       # exact + most semantics must hit
     assert rep["latency_ms"]["p95"] > 0
     assert rep["machine"]                    # stamped with real machine identity

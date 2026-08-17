@@ -205,10 +205,16 @@ def main(argv: list[str] | None = None):
 
     if args.cmd == "safety":
         guard = SafetyGuard(cfg.source_roots, cfg.workspace)
+        # Operator-declared volatile patterns, from config.yaml. Applied to
+        # BOTH snapshot and verify so the declaration in force is recorded on
+        # the artifact itself and the reviewer can rule on the excuse.
+        if cfg.volatile_patterns:
+            guard.allow_volatile(list(cfg.volatile_patterns))
         snap = cfg.dir("reports") / "safety_snapshot.jsonl"
         if args.action == "snapshot":
             n = guard.snapshot(snap)
-            _print({"snapshot": str(snap), "files": n})
+            _print({"snapshot": str(snap), "files": n,
+                    "volatile_patterns": list(guard.volatile_patterns)})
         else:
             result = guard.verify_snapshot(snap)
             out = cfg.dir("reports") / f"safety_verify_{int(time.time())}.json"
