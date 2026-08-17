@@ -1,0 +1,242 @@
+[
+  {
+    "id": "F5-1",
+    "status": "RED",
+    "desc": "project-name-only evidence can be SUPPORTED",
+    "tail": "1 failed, 151 passed, 1 warning in 11.58s"
+  },
+  {
+    "id": "N4-1",
+    "status": "RED",
+    "desc": "measurement loosens instead of tightening the floor",
+    "tail": "1 failed, 101 passed, 1 warning in 2.85s"
+  },
+  {
+    "id": "F5-6",
+    "status": "RED",
+    "desc": "document frequencies never reach the verifier (wiring, not helper)",
+    "tail": "1 failed, 170 passed, 1 warning in 12.94s"
+  },
+  {
+    "id": "N4-8",
+    "status": "RED",
+    "desc": "_term_stats helper itself disabled",
+    "tail": "1 failed, 126 passed, 1 warning in 5.15s"
+  },
+  {
+    "id": "F5-6b",
+    "status": "RED",
+    "desc": "the 'unmeasured' disclosure can claim measurement it never had",
+    "tail": "1 failed, 171 passed, 1 warning in 13.72s"
+  },
+  {
+    "id": "R3-3",
+    "status": "RED",
+    "desc": "floor gates the set instead of filtering per item",
+    "tail": "1 failed, 40 passed, 1 warning in 1.61s"
+  },
+  {
+    "id": "R3-12a",
+    "status": "RED",
+    "desc": "stopwords not removed from content terms",
+    "tail": "1 failed, 95 passed, 1 warning in 2.72s"
+  },
+  {
+    "id": "R3-12b",
+    "status": "RED",
+    "desc": "a single shared term is enough",
+    "tail": "1 failed, 95 passed, 1 warning in 2.84s"
+  },
+  {
+    "id": "N4-4",
+    "status": "RED",
+    "desc": "naming a file certifies arbitrary content as SUPPORTED",
+    "tail": "1 failed, 134 passed, 1 warning in 11.22s"
+  },
+  {
+    "id": "N4-5",
+    "status": "RED",
+    "desc": "project label stripped term-by-term instead of as a phrase",
+    "tail": "1 failed, 95 passed, 1 warning in 3.17s"
+  },
+  {
+    "id": "R3-2a",
+    "status": "RED",
+    "desc": "revision tokens count as document identifiers",
+    "tail": "1 failed, 94 passed, 1 warning in 2.69s"
+  },
+  {
+    "id": "R3-2b",
+    "status": "RED",
+    "desc": "a code mentioned in the body certifies the document",
+    "tail": "1 failed, 95 passed, 1 warning in 3.07s"
+  },
+  {
+    "id": "F5-2",
+    "status": "RED",
+    "desc": "code variants not indexed, so the exact leg misses real filenames",
+    "tail": "1 failed, 156 passed, 1 warning in 12.28s"
+  },
+  {
+    "id": "F5-2b",
+    "status": "RED",
+    "desc": "filename code variants not indexed",
+    "tail": "1 failed, 156 passed, 1 warning in 12.07s"
+  },
+  {
+    "id": "N4-3b",
+    "status": "RED",
+    "desc": "total code-variant bound removed (index-time work unbounded)",
+    "tail": "1 failed, 162 passed, 1 warning in 11.34s"
+  },
+  {
+    "id": "F3a",
+    "status": "RED",
+    "desc": "project filter fails open",
+    "tail": "1 failed, 32 passed, 1 warning in 1.10s"
+  },
+  {
+    "id": "F3b",
+    "status": "RED",
+    "desc": "exact-ID leg unscoped",
+    "tail": "1 failed, 33 passed, 1 warning in 1.24s"
+  },
+  {
+    "id": "F3c",
+    "status": "RED",
+    "desc": "re-inference leaves FTS project labels stale",
+    "tail": "1 failed, 34 passed, 1 warning in 1.35s"
+  },
+  {
+    "id": "N4-2",
+    "status": "RED",
+    "desc": "unattributed evidence merged with a named project",
+    "tail": "1 failed, 72 passed, 1 warning in 2.48s"
+  },
+  {
+    "id": "F5-5",
+    "status": "RED",
+    "desc": "escalation keys on query wording, not on the evidence",
+    "tail": "1 failed, 72 passed, 1 warning in 2.60s"
+  },
+  {
+    "id": "R3-1",
+    "status": "RED",
+    "desc": "cross-project consent inferred from ordinary questions",
+    "tail": "1 failed, 85 passed, 1 warning in 2.82s"
+  },
+  {
+    "id": "N4-4b",
+    "status": "RED",
+    "desc": "graph leg unscoped before fusion",
+    "tail": "1 failed, 35 passed, 1 warning in 1.39s"
+  },
+  {
+    "id": "EXACT-LEG",
+    "status": "RED",
+    "desc": "exact-ID retrieval leg disabled entirely",
+    "tail": "1 failed, 157 passed, 1 warning in 11.71s"
+  },
+  {
+    "id": "N4-6a",
+    "status": "RED",
+    "desc": "over-broad volatile patterns accepted",
+    "tail": "1 failed, 110 passed, 1 warning in 2.98s"
+  },
+  {
+    "id": "F5-4",
+    "status": "RED",
+    "desc": "volatile patterns accepted when no excluded dirs are configured",
+    "tail": "1 failed, 160 passed, 1 warning in 12.17s"
+  },
+  {
+    "id": "F5-3",
+    "status": "RED",
+    "desc": "safety walk ignores excluded directories",
+    "tail": "1 failed, 54 passed, 1 warning in 2.26s"
+  },
+  {
+    "id": "N4-6c",
+    "status": "RED",
+    "desc": "audit certifies a run carried by an allowlist",
+    "tail": "1 failed, 142 passed, 1 warning in 10.42s"
+  },
+  {
+    "id": "R3-7b",
+    "status": "RED",
+    "desc": "clean pass indistinguishable from an excused one",
+    "tail": "1 failed, 117 passed, 1 warning in 3.04s"
+  },
+  {
+    "id": "HASH",
+    "status": "RED",
+    "desc": "snapshot hashes not recorded",
+    "tail": "1 failed, 107 passed, 1 warning in 2.94s"
+  },
+  {
+    "id": "N4-9",
+    "status": "RED",
+    "desc": "project_source missing from citations",
+    "tail": "1 failed, 149 passed, 1 warning in 10.26s"
+  },
+  {
+    "id": "F5-7",
+    "status": "RED",
+    "desc": "re-inference forges project_source",
+    "tail": "1 failed, 172 passed, 1 warning in 13.78s"
+  },
+  {
+    "id": "PCT",
+    "status": "RED",
+    "desc": "project_unknown_pct hardcoded",
+    "tail": "1 failed, 174 passed, 1 warning in 11.15s"
+  },
+  {
+    "id": "N4-10",
+    "status": "RED",
+    "desc": "unattributed sources scored as correct",
+    "tail": "1 failed, 150 passed, 1 warning in 9.73s"
+  },
+  {
+    "id": "WPR",
+    "status": "RED",
+    "desc": "wrong-project gate accepts any rate",
+    "tail": "1 failed, 173 passed, 1 warning in 11.64s"
+  },
+  {
+    "id": "N5",
+    "status": "RED",
+    "desc": "duplicate benchmark questions accepted",
+    "tail": "1 failed, 108 passed, 1 warning in 3.06s"
+  },
+  {
+    "id": "N6",
+    "status": "RED",
+    "desc": "quality gates need no sample",
+    "tail": "1 failed, 76 passed, 1 warning in 2.37s"
+  },
+  {
+    "id": "N7",
+    "status": "RED",
+    "desc": "audit picks evidence by filename",
+    "tail": "1 failed, 78 passed, 1 warning in 2.38s"
+  },
+  {
+    "id": "R3-8",
+    "status": "RED",
+    "desc": "project label sync fails silently",
+    "tail": "1 failed, 118 passed, 1 warning in 3.03s"
+  },
+  {
+    "id": "R3-9",
+    "status": "RED",
+    "desc": "degraded lexical leg invisible",
+    "tail": "1 failed, 123 passed, 1 warning in 3.37s"
+  },
+  {
+    "id": "R3-10",
+    "status": "RED",
+    "desc": "tiebreak uses its own tokenizer",
+    "tail": "1 failed, 35 passed, 1 warning in 1.20s"
+  }
+]
