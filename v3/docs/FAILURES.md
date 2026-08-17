@@ -168,3 +168,21 @@ excluded, so web-app assets were queued as knowledge images. FIX: added
 skipped rather than attempted; a re-run should report 0 failures.
 LESSON: read the failure list — a uniform failure signature usually means the
 wrong files were queued, not that the parser is broken.
+
+**F-V3-11 / 2026-08-17 / LLM client / `think: false` never reached the model** —
+SYMPTOM: with FAST budgets raised to 1024, a query still returned no answer:
+`reasoning_tokens: 921`, `finish_reason: "length"`. The model was thinking on
+every FAST query despite the mode explicitly disabling it. ROOT CAUSE: requests
+went to Ollama's OpenAI-compatible shim at `/v1/chat/completions`, which follows
+the OpenAI schema and silently discards non-standard fields — so `think` was
+dropped in transit and never applied. Only Ollama's native `/api/chat` honours
+it. Raising the token budget treated the symptom: thinking always consumed
+whatever budget it was given. FIX: added `api_style` (`openai` |
+`ollama_native`); the native path posts to `/api/chat` (stripping a trailing
+`/v1` from base_url), sets `think` per mode, and parses newline-delimited JSON
+with `message.thinking` separate from `message.content`. The machine config now
+uses it, and FAST budgets return to answer-sized (800) rather than inflated to
+accommodate hidden reasoning. RESULT: `test_ollama_native_stream_parsing`,
+`test_ollama_native_enables_thinking_for_deep`.
+LESSON: a compatibility shim silently dropping a parameter looks exactly like
+the parameter having no effect — verify the knob arrives, don't just set it.

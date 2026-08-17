@@ -53,19 +53,22 @@ llm:
   # offload makes visual queries too slow; benchmark before choosing.
   model_vision: qwen3.8:27b
 
-  # Ollama's OpenAI-compatible layer takes `think` for reasoning control.
-  # VERIFY against your Ollama version before trusting the mapping (§34):
-  #   ollama --version   and  https://docs.ollama.com/api
-  # If your build rejects it, set this to "none" — modes still work, they just
-  # stop toggling the thinking budget.
+  # MEASURED (F-V3-11): via /v1/chat/completions a FAST query burned 921
+  # reasoning tokens and hit the limit with no answer — the OpenAI shim drops
+  # `think`, so thinking was never actually disabled. Ollama's native /api/chat
+  # honours it, so we speak that instead. base_url's trailing /v1 is stripped
+  # automatically.
+  api_style: ollama_native
   reasoning_param_style: ollama_think
 
   timeout_s: 300
   # Raised after F-V3-09: qwen3.5 spent a 400-token FAST budget entirely on
   # reasoning and returned an empty answer. These cover thinking + answer.
-  max_answer_tokens_fast: 1024
-  max_answer_tokens_deep: 3000
-  max_answer_tokens_fullswing: 8000
+  # With thinking genuinely off for FAST these are answer tokens, not
+  # thinking+answer. DEEP/FULLSWING keep headroom because they think on purpose.
+  max_answer_tokens_fast: 800
+  max_answer_tokens_deep: 4000
+  max_answer_tokens_fullswing: 10000
 
 embed:
   # bge-m3:latest is confirmed installed. 1024-dim, multilingual EN+MS —

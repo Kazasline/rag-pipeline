@@ -111,3 +111,13 @@ Why: F-V3-03 — the operator's own services rewrite logs and heartbeats
 continuously, so "did anything change?" is unanswerable as a safety signal on
 a live machine. Attribution via the write journal makes `pass` mean what §84
 actually asks. `pass_strict` is retained so nothing is hidden.
+
+**D-19 — Talk to Ollama through its native `/api/chat`, not the `/v1` shim.**
+Alternatives: stay on the OpenAI path and raise token budgets; append a
+`/no_think` prompt switch. Why: F-V3-11 — the shim drops `think`, so reasoning
+could not be disabled at all and FAST paid a full chain-of-thought on every
+query. Raising budgets only fed the thinking. The OpenAI path remains the
+default and is still what LM Studio / llama.cpp / vLLM / SGLang use, so
+`api_style` keeps both without forking the client. Revisit: if Ollama's shim
+gains real `think` support, or if the backend shootout (§33) moves serving to
+llama.cpp, where the OpenAI path applies again.

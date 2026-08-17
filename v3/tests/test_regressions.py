@@ -211,3 +211,65 @@ def test_reasoning_deltas_counted_separately():
     assert _empty_reason("", 400, "length") is not None
     assert "raise max_answer_tokens" in _empty_reason("", 400, "length")
     assert _empty_reason("real answer", 400, "stop") is None
+
+
+# ---------------------------------------------------------------- F-V3-11
+def test_ollama_native_stream_parsing(monkeypatch):
+    """Native /api/chat streams newline-JSON with thinking split from content."""
+    import io
+    import alirag.llm as llm_mod
+    from alirag.config import Config
+
+    cfg = Config()
+    cfg.llm.api_style = "ollama_native"
+    cfg.llm.base_url = "http://127.0.0.1:11434/v1"   # /v1 must be stripped
+    cfg.llm.model = "qwen3.5:9b"
+
+    captured = {}
+
+    class FakeResp(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["body"] = json.loads(req.data.decode())
+        return FakeResp(b'\n'.join([
+            b'{"message":{"thinking":"hmm"},"done":false}',
+            b'{"message":{"content":"Jawapan "},"done":false}',
+            b'{"message":{"content":"penuh."},"done":false}',
+            b'{"done":true,"done_reason":"stop"}',
+        ]))
+
+    monkeypatch.setattr(llm_mod.urllib.request, "urlopen", fake_urlopen)
+    out = llm_mod.LLMClient(cfg).chat("sys", "user", mode="FAST")
+
+    assert captured["url"].endswith("/api/chat"), captured["url"]
+    assert "/v1/" not in captured["url"]
+    assert captured["body"]["think"] is False, "FAST must disable thinking"
+    assert out["text"] == "Jawapan penuh."
+    assert out["reasoning_tokens"] == 1
+    assert out["finish_reason"] == "stop"
+    assert out["empty_reason"] is None
+
+
+def test_ollama_native_enables_thinking_for_deep(monkeypatch):
+    import io
+    import alirag.llm as llm_mod
+    from alirag.config import Config
+
+    cfg = Config()
+    cfg.llm.api_style = "ollama_native"
+    captured = {}
+
+    class FakeResp(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode())
+        return FakeResp(b'{"message":{"content":"x"},"done":true,"done_reason":"stop"}')
+
+    monkeypatch.setattr(llm_mod.urllib.request, "urlopen", fake_urlopen)
+    llm_mod.LLMClient(cfg).chat("s", "u", mode="DEEP")
+    assert captured["body"]["think"] is True, "DEEP should think"

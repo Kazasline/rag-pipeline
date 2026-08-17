@@ -82,6 +82,11 @@ class LLMConfig:
     """
     base_url: str = "http://127.0.0.1:1234/v1"
     model: str = "UNVERIFIED-set-after-phase0-inspection"
+    # "openai" = /v1/chat/completions (LM Studio, llama.cpp, vLLM, SGLang).
+    # "ollama_native" = Ollama's own /api/chat, which is the ONLY way to
+    # actually disable thinking on Ollama: the /v1 shim drops non-standard
+    # fields, so `think: false` never reaches the model (F-V3-11).
+    api_style: str = "openai"
     api_key: str = ""                    # local servers usually ignore this; never commit real keys
     timeout_s: float = 300.0
     # Budgets must cover chain-of-thought AND the answer. Measured on Qwen3.5:

@@ -69,6 +69,81 @@ class LLMClient:
                            "FULLSWING": self.cfg.max_answer_tokens_fullswing}
 
     def chat(self, system: str, user: str, mode: str = "FAST") -> dict:
+        if self.cfg.api_style == "ollama_native":
+            return self._chat_ollama_native(system, user, mode)
+        return self._chat_openai(system, user, mode)
+
+    # ------------------------------------------------------------ Ollama native
+    def _chat_ollama_native(self, system: str, user: str, mode: str) -> dict:
+        """Ollama's own /api/chat.
+
+        F-V3-11: the OpenAI-compatible /v1 endpoint silently drops non-standard
+        fields, so `think: false` never reached the model and every FAST query
+        paid for a full chain-of-thought. Only the native API honours it. Its
+        stream is newline-delimited JSON (not SSE) and carries thinking in
+        `message.thinking`, separate from `message.content`.
+        """
+        base = self.cfg.base_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3].rstrip("/")
+        body = {
+            "model": self.cfg.model_for(mode),
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "stream": True,
+            "think": mode != "FAST",
+            "options": {"num_predict": self.max_tokens.get(mode, 1024),
+                        "temperature": 0.2},
+        }
+        req = urllib.request.Request(
+            base + "/api/chat", data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"})
+        t0 = time.perf_counter()
+        ttft = None
+        parts: list[str] = []
+        ntok = reasoning_tokens = 0
+        finish_reason = None
+        try:
+            with urllib.request.urlopen(req, timeout=self.cfg.timeout_s) as r:
+                for raw in r:
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if rec.get("error"):
+                        raise LLMError(f"Ollama error: {rec['error']}")
+                    msg = rec.get("message") or {}
+                    if msg.get("thinking"):
+                        reasoning_tokens += 1
+                    content = msg.get("content")
+                    if content:
+                        if ttft is None:
+                            ttft = time.perf_counter() - t0
+                        parts.append(content)
+                        ntok += 1
+                    if rec.get("done"):
+                        finish_reason = rec.get("done_reason") or "stop"
+                        break
+        except OSError as e:
+            raise LLMError(f"Ollama unreachable at {base}: {e}") from e
+        total = time.perf_counter() - t0
+        gen = total - (ttft or 0)
+        text = "".join(parts).strip()
+        return {"text": text,
+                "ttft_ms": round((ttft or 0) * 1000, 1),
+                "gen_ms": round(gen * 1000, 1),
+                "tokens": ntok,
+                "reasoning_tokens": reasoning_tokens,
+                "finish_reason": finish_reason,
+                "total_ms": round(total * 1000, 1),
+                "empty_reason": _empty_reason(text, reasoning_tokens, finish_reason),
+                "tokens_per_s": round(ntok / gen, 1) if gen > 0.05 and ntok else None}
+
+    # ------------------------------------------------------------ OpenAI-compatible
+    def _chat_openai(self, system: str, user: str, mode: str = "FAST") -> dict:
         """Returns {text, ttft_ms, gen_ms, tokens, tokens_per_s}."""
         body = {
             "model": self.cfg.model_for(mode),
