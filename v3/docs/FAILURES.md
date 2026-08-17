@@ -618,3 +618,103 @@ measurable, and `None` cannot satisfy the gate. RESULT:
 `test_wrong_project_rate_excludes_unattributed_from_the_denominator`.
 LESSON: a metric that scores "unknown" as "correct" reports best when it knows
 least.
+
+
+**F-V3-37 / test coverage / the fix for "untested wiring" was itself untested
+wiring** — SYMPTOM: round 4 closed N4-8 (no test executed the measured
+document-frequency path) with a 260-document fixture and three tests named for
+end-to-end coverage. The round-5 reviewer cut the actual call in
+`Engine.query` — `df, ndocs = None, 0` — and all 205 tests stayed green. ROOT
+CAUSE: all three tests called `Engine._term_stats()` directly, so they bit only
+when the HELPER was broken, never when the WIRING was. I recreated the exact
+defect I was closing, one layer up, and then asserted the matrix was complete
+for the third consecutive round. FIX: a behavioural test — "girth" appears in
+every document of the fixture and is absent from the hand-written boilerplate
+list, so it can only be discarded by measurement; with the wiring cut the query
+is answered, with it intact the floor refuses. And, because assertion has
+failed three times, `v3/tools/revert_matrix.py` now applies every mutation,
+runs the suite, and reports which fixes nothing would notice breaking. It exits
+non-zero if any survive. RESULT:
+`test_document_frequencies_actually_reach_the_verifier`, plus the matrix
+artifact.
+LESSON: a test that calls the helper proves the helper works. Only a test that
+asserts a BEHAVIOUR proves the helper is being used. And a claim about test
+coverage that cannot be re-run is not evidence — it is the same
+claim-from-attempt §79 forbids, made about testing instead of about code.
+
+**F-V3-38 / grounding / the floor depended on the word order of the question** —
+SYMPTOM: "In the Dawson Meridian Towers, what is the final claim amount?" was
+correctly refused; "what is the final claim amount for Meridian Towers Dawson?"
+returned SUPPORTED, citing a drawing title block whose entire content was
+"DAWSON MERIDIAN TOWERS / Drawing title block. Sheet 12 of 40. Scale 1:100."
+ROOT CAUSE: two independently conservative mechanisms composed into a hole.
+`_project_hint` claims a project only on a VERBATIM match, and the phrase-strip
+in `verify()` ran only when a hint was set — so reordering the name left the
+hint None, nothing stripped, and the project name counted as discriminating
+evidence. Document frequency did not help: project names are rare corpus-wide.
+FIX: terms belonging to ANY known project can never be the sole grounds for
+admitting a chunk, whatever the hint or the word order. They are not subtracted
+outright — that was N4-5, which deleted real evidence — they simply cannot
+stand alone. RESULT: `test_project_name_alone_is_never_evidence_whatever_the_
+word_order` (4 phrasings), `test_a_real_answer_is_not_lost_when_it_shares_the_
+project_name`.
+LESSON: two conservative mechanisms can compose into a permissive one when each
+assumes the other fired. "Only when a hint is set" is a coupling, not a guard.
+
+**F-V3-39 / §84 / my own tightening made the safety gate unsatisfiable** —
+SYMPTOM: round 4 made `reviewer.audit` require `verdict == "PASS"`. The shipped
+`config.kazasline.yaml` declares `*/hermes/*` and `*/sci_ai_library/*` volatile
+because those services rewrite state continuously, and the safety walk covered
+them — so every run produced PASS_WITH_EXCUSES and the audit refused it, while
+removing the declarations produced FAIL. DATA_SAFETY could not be earned on the
+shipped configuration by any means. ROOT CAUSE: I bounded the escape hatch
+without noticing the legitimate case still had to pass through it. The config's
+own comment — "a gate that can never legitimately go green is a gate the
+operator learns to ignore" — had come to describe the gate I built. FIX
+upstream: `_walk_sources()` honours `excluded_dirs`, so a directory declared
+non-knowledge is out of the diff entirely and a genuinely clean PASS is
+reachable with no excuse in force. One declaration in config now carries both
+consequences, visibly. RESULT:
+`test_shipped_config_can_produce_a_clean_safety_pass`,
+`test_a_document_change_still_fails_with_exclusions_in_force`.
+LESSON: when tightening a gate, check that the legitimate path still reaches
+the other side. An unsatisfiable guard is not a strict guard; it is a guard
+about to be disabled.
+
+**F-V3-40 / §60 / escalation keyed on vocabulary, twice** — SYMPTOM: the same
+unattributable payment chunk escalated for "what is the final claim amount" and
+merely disclosed for "how much was billed", "what is the unpaid portion", and
+seven other ordinary phrasings. ROOT CAUSE: the trigger was a keyword regex
+over the QUERY, widened twice against the examples quoted at me while the class
+stayed open. The verifier already knew the evidence was monetary — MONEY_RE
+fires on it to build the conflict list. FIX: the trigger is now a property of
+the EVIDENCE (a money or date match), which no rephrasing can evade; the query
+regex remains only as an additional trigger for evidence carrying no figure.
+RESULT: `test_escalation_keys_on_the_evidence_not_the_phrasing` (6 phrasings),
+`test_non_monetary_unattributed_evidence_is_not_over_escalated`.
+LESSON: when a guard can be evaded by rewording, it is keyed on the wrong
+thing. Key on the material, not on how the question was asked.
+
+**F-V3-41 / §4 / re-inference forged provenance** — SYMPTOM:
+`reinfer_metadata`'s UPDATE set `project` but not `project_source`, so a
+manually confirmed `content` attribution survived a re-infer that had just
+replaced the project with a folder guess. The citation then asserted the guess
+had been confirmed from document content. `reinfer` is the documented remedy
+path for F-V3-04 and will be run. FIX: `project_source` moves with `project`.
+RESULT: `test_reinference_does_not_forge_project_provenance`.
+LESSON: §4 was violated by the very column added to satisfy §4. A provenance
+field that is not updated everywhere its subject is updated is worse than none,
+because it is believed.
+
+**F-V3-42 / §9 / the exact-ID index was never given the fix** — SYMPTOM:
+`find L-201` still could not reach `L-201-RevB.pdf` through the exact leg.
+ROOT CAUSE: round 4 added `code_variants()` to the VERIFIER only; the ids table
+still stored the greedy `L201REVB` and `search_ids` looked up `L201`. FAST was
+left hoping BM25 ranked the right sheet into the top 20 across 662k files —
+precisely what §9 exists to avoid. The certifying test passed for the wrong
+reason: a one-document corpus where BM25 cannot miss. FIX: variants are indexed
+at write time. RESULT: `test_exact_id_leg_finds_a_code_inside_a_longer_
+filename`, `test_named_document_is_answered_via_the_exact_leg_at_scale`
+(asserts `retrievers` contains `exact`, on a 260-document corpus).
+LESSON: fixing the consumer is not fixing the producer. And a test at a scale
+where every path succeeds certifies nothing about which path ran.

@@ -192,8 +192,11 @@ def test_volatile_patterns_are_reachable_from_config_and_reported(tmp_path: Path
     assert rep["pass"] is True, (rep["unexplained_modified"], rep["volatile_patterns"])
     assert rep["volatile_patterns"] == ["*/hermes/*"], \
         "the declaration in force must be recorded on the artifact"
-    assert any("beat.log" in p for p in rep["allowlisted_modified"]), \
-        "the excused change must be listed, not merely absent"
+    # Round-5 F5-3: the live-service directory is excluded from indexing, so
+    # the walk skips it and the heartbeat never enters the diff. The verdict is
+    # a genuinely CLEAN pass — which is what makes the audit gate satisfiable.
+    assert rep["verdict"] == "PASS", rep["verdict"]
+    assert not rep["allowlisted_modified"] and not rep["modified"]
 
 
 def test_a_document_change_is_never_excused_by_a_volatile_pattern(tmp_path: Path):

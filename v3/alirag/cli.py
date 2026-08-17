@@ -102,7 +102,8 @@ def main(argv: list[str] | None = None):
 
     if args.cmd == "inventory":
         from .inventory import organization_report, reinfer_metadata, scan
-        guard = SafetyGuard(cfg.source_roots, cfg.workspace)
+        guard = SafetyGuard(cfg.source_roots, cfg.workspace,
+                            excluded_dirs=cfg.ingest.exclude_dirs)
         mf = Manifest(cfg.manifest_db)
         if args.reinfer:
             res = reinfer_metadata(cfg, mf)

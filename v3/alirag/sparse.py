@@ -141,16 +141,25 @@ class SparseIndex:
             self.con.execute(
                 "INSERT INTO fts(text, filename, project, chunk_id) VALUES(?,?,?,?)",
                 (r["text"], r["filename"], r.get("project", ""), r["chunk_id"]))
-            for raw in harvest_ids(r["text"]):
+            # Index every code VARIANT, not just the greedy whole token.
+            #
+            # Round-5 reviewer F5-2: `code_variants()` was added to the
+            # verifier only, so the ids table still stored `L201REVB` for
+            # `L-201-RevB` and `search_ids` looked up `norm = 'L201'` — the §9
+            # exact leg found nothing for the majority of real drawing
+            # filenames, and FAST fell back to hoping BM25 ranked the right
+            # sheet into the top 20 across 662k files. Exactly what the exact
+            # path exists to avoid.
+            for norm in code_variants(r["text"]):
                 self.con.execute(
                     "INSERT INTO ids(norm, raw, chunk_id, file_id, in_filename) "
                     "VALUES(?,?,?,?,0)",
-                    (normalize_id(raw), raw, r["chunk_id"], r["file_id"]))
-            for raw in harvest_ids(r["filename"]):
+                    (norm, norm, r["chunk_id"], r["file_id"]))
+            for norm in code_variants(r["filename"]):
                 self.con.execute(
                     "INSERT INTO ids(norm, raw, chunk_id, file_id, in_filename) "
                     "VALUES(?,?,?,?,1)",
-                    (normalize_id(raw), raw, r["chunk_id"], r["file_id"]))
+                    (norm, norm, r["chunk_id"], r["file_id"]))
         self.con.commit()
 
     def delete_file(self, chunk_ids: list[int]):

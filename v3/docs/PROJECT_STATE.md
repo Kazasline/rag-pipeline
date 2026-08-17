@@ -6,16 +6,21 @@ fix pass that followed it._
 ## Where we are
 
 ```
-✅ PHASE 0-15   code built + 205 tests green
+✅ PHASE 0-15   code built + 228 tests green
 ✅ PHASE 0      EXECUTED on the target machine (2026-08-17)
 ✅ PHASE 1      EXECUTED — 20,000-file pilot inventory of E:\
 ✅ PHASE 5-15   installed; 313 files ingested, first grounded answers returned
 ⬜ PHASE 16     benchmark (needs a human-reviewed question set)
-🔄 PHASE 17-19  independent reviewer has run FOUR times and FAILED each time
-                (round 1: 3 of 6 categories; round 2: 4 of 6; round 3: 2 of 6;
-                round 4: 4 of 6 — three categories REGRESSED, one on a
-                documentation claim that was simply wrong). Round-4 fixes are
-                in. Round 5 pending — the reviewer, not the builder, decides.
+🔄 PHASE 17-19  independent reviewer has run FIVE times and FAILED each time
+                (round 1: 3/6; round 2: 4/6; round 3: 2/6; round 4: 4/6;
+                round 5: 5/6). Round-5 fixes are in. Round 6 pending — the
+                reviewer, not the builder, decides.
+
+                Read `v3/tools/revert_matrix.py` before believing any claim in
+                this file about test coverage. It disables each fix in turn and
+                reports which ones no test would notice. Three separate rounds
+                asserted a complete revert matrix and were wrong; the artifact
+                exists so the claim can be checked instead of trusted.
 ⬜ PHASE 20     final docs with real numbers
 ```
 

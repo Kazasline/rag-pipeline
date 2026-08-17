@@ -44,11 +44,19 @@ recall/MRR (or hurts latency beyond its gain) gets removed, per §89.
 
 ## First measured latencies (2026-08-17, smoke run — NOT a scored benchmark)
 
-Machine: RTX 5080 16.3 GB (5.9 GB free), Intel 20-core, 68 GB RAM, Ollama.
+Machine: RTX 5080 16.3 GB (**4.7 GB free at inspection** — an earlier draft of
+this line said 5.9 GB, which contradicted PROJECT_STATE.md for the same
+inspection; 4.7 GB is the figure in the Phase 0 artifact), Intel 20-core,
+68 GB RAM, Ollama.
 Index at time of measurement: 16,782 chunks, memmap dense backend.
 Source: 3 ad-hoc queries via `alirag metrics`. **n=3 — indicative only.**
 
-### Retrieval stages — comfortably within the §10 objective
+### Retrieval stages — the §10 objective is NOT met
+
+(Round-5 reviewer F5-8: this heading previously read "comfortably within the
+§10 objective", directly above a table showing `dense_search p95 = 1813 ms`
+against a 250 ms objective, and above this file's own correction saying it is
+not met. One unguarded heading undoes a page of careful qualification.)
 
 | stage | p50 | p95 |
 |---|---|---|

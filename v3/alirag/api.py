@@ -85,7 +85,8 @@ def create_app(cfg: Config | None = None):
         from .ingest import Ingestor
         from .inventory import scan
         from .safety import SafetyGuard
-        guard = SafetyGuard(cfg.source_roots, cfg.workspace)
+        guard = SafetyGuard(cfg.source_roots, cfg.workspace,
+                            excluded_dirs=cfg.ingest.exclude_dirs)
         inv = scan(cfg, guard, engine.mf, max_files=None)
         ing = Ingestor(cfg, mf=engine.mf)
         counts = ing.run(limit=limit)

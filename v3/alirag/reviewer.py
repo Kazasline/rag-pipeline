@@ -199,7 +199,13 @@ def audit(cfg: Config) -> dict:
     # LATENCY — FAST p95 within objective (§10), from real traces
     fast = _load_json(_latest("report_fast*.json", bench_dir))
     ok = None
-    detail = "§10: FAST retrieval p95 target ~250ms (objective, not fabricated)"
+    # The GATE is end-to-end p95 <= 2000 ms; the §10 retrieval-only objective
+    # is ~250 ms and is NOT what passing here means. Round-5 reviewer F5-8: the
+    # detail line quoted the 250 ms target next to a PASS, so the row read as
+    # the objective having been met.
+    detail = ("§10: end-to-end FAST p95 gate is 2000ms. The §10 retrieval-only "
+              "objective (~250ms) is a SEPARATE target this row does not "
+              "certify")
     if fast:
         lat = fast.get("latency_ms", {})
         p95 = lat.get("p95")

@@ -177,7 +177,8 @@ class Engine:
         df, ndocs = self._term_stats(r.cleaned_query)
         verdict = verify(evidence, project_hint=r.project_hint,
                          query=r.cleaned_query, cross_project=r.cross_project,
-                         doc_freq=df, total_docs=ndocs)
+                         doc_freq=df, total_docs=ndocs,
+                         known_projects=self._projects_cache)
         trace.set("evidence_status", verdict.status)
         trace.set("verifier_flags", verdict.flags)
 
@@ -201,7 +202,8 @@ class Engine:
                 verdict = verify(combined, project_hint=r.project_hint,
                                  query=r.cleaned_query,
                                  cross_project=r.cross_project,
-                                 doc_freq=df, total_docs=ndocs)
+                                 doc_freq=df, total_docs=ndocs,
+                                 known_projects=self._projects_cache)
                 trace.set("second_pass", True)
                 trace.set("evidence_status", verdict.status)
                 trace.set("verifier_flags", verdict.flags)

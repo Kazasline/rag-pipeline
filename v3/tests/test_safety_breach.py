@@ -119,9 +119,16 @@ def test_a_refused_write_is_not_counted_as_our_write(tmp_path):
 
 
 # ---------------------------------------------------------------- allow-list
-def test_declared_live_service_paths_do_not_fail_the_check(tmp_path):
-    """Real machines have services writing their own logs. Those are excused
-    ONLY when explicitly declared — not by default."""
+def test_excluded_live_service_dirs_never_enter_the_diff(tmp_path):
+    """Real machines have services writing their own logs continuously.
+
+    Round-5 reviewer F5-3: excusing them via the allowlist made every run
+    PASS_WITH_EXCUSES, which the audit then refused — the §84 gate was
+    unsatisfiable on the shipped config. Directories excluded from indexing are
+    now skipped by the safety walk too, so their writes never enter the diff
+    and a genuinely clean PASS is reachable. The single declaration in
+    `ingest.exclude_dirs` carries both consequences, visibly.
+    """
     guard, src = _guard(tmp_path)
     (src / "hermes").mkdir()
     beat = src / "hermes" / "ticker.heartbeat"
@@ -132,13 +139,10 @@ def test_declared_live_service_paths_do_not_fail_the_check(tmp_path):
 
     beat.write_text("t1", encoding="utf-8")
 
-    strict = guard.verify_snapshot(snap)
-    assert strict["pass"] is False, "undeclared changes must not be excused"
-
-    guard.allow_volatile(["*/hermes/*"])
-    excused = guard.verify_snapshot(snap)
-    assert excused["pass"] is True, "declared live-service paths are excused"
-    assert str(beat) in excused["allowlisted_modified"]
+    clean = guard.verify_snapshot(snap)
+    assert clean["pass"] is True, clean["unexplained_modified"]
+    assert clean["verdict"] == "PASS", "an excluded service write is not an excuse"
+    assert str(beat) not in clean["modified"]
 
     # ...but the allow-list must not excuse a real document
     doc.write_text("clobbered", encoding="utf-8")

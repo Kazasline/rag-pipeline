@@ -278,25 +278,37 @@ def test_directory_anchored_patterns_are_still_accepted():
 
 def test_excused_run_is_distinguishable_from_a_clean_one(tmp_path: Path):
     """A pass earned by an allowlist is not a clean run, and the machine-
-    readable verdict must say so — not only a detail string nobody parses."""
+    readable verdict must say so — not only a detail string nobody parses.
+
+    The remaining live case for the allowlist, now that excluded directories
+    are skipped by the walk (F5-3): the operator adds an exclusion AFTER a
+    snapshot was taken, so files recorded then are absent from the re-scan and
+    would otherwise be reported as deletions.
+    """
     src = tmp_path / "src"
     (src / "hermes").mkdir(parents=True)
     (src / "tender.txt").write_text("original", encoding="utf-8")
     (src / "hermes" / "beat.log").write_text("tick", encoding="utf-8")
-    guard = SafetyGuard([str(src)], str(tmp_path / "ws"), excluded_dirs=("hermes", "sci_ai_library", "svc", "logs"))
-    guard.allow_volatile(["*/hermes/*"])
+
+    before = SafetyGuard([str(src)], str(tmp_path / "ws"))      # no exclusions yet
     snap = tmp_path / "ws" / "snap.jsonl"
-    guard.snapshot(snap)
+    before.snapshot(snap)
 
-    assert guard.verify_snapshot(snap)["verdict"] == "PASS"
+    after = SafetyGuard([str(src)], str(tmp_path / "ws"),
+                        excluded_dirs=("hermes",))
+    res = after.verify_snapshot(snap)
+    assert res["pass"] is False, "an unexplained disappearance must fail"
+    assert res["verdict"] == "FAIL"
 
-    (src / "hermes" / "beat.log").write_text("tick tock", encoding="utf-8")
-    res = guard.verify_snapshot(snap)
+    after.allow_volatile(["*/hermes/*"])
+    res = after.verify_snapshot(snap)
     assert res["pass"] is True
-    assert res["verdict"] == "PASS_WITH_EXCUSES"
+    assert res["verdict"] == "PASS_WITH_EXCUSES", res["verdict"]
+    assert any("beat.log" in p for p in res["allowlisted_deleted"])
 
+    # ...and the allowlist still cannot cover a real document
     (src / "tender.txt").write_text("edited by something else", encoding="utf-8")
-    res = guard.verify_snapshot(snap)
+    res = after.verify_snapshot(snap)
     assert res["pass"] is False and res["verdict"] == "FAIL"
     assert any("tender.txt" in p for p in res["unexplained_modified"])
 

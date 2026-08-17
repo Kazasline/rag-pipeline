@@ -199,10 +199,11 @@ class Manifest:
             "SELECT COUNT(*) FROM files WHERE duplicate_tag IS NOT NULL").fetchone()[0]
         # Share of files whose project could not be inferred.
         #
-        # The verifier DISCLOSES unattributed evidence rather than refusing it
-        # (D-20), which is only defensible while the operator can see how much
-        # of the corpus that covers. Round-3 reviewer, N3 condition 3: without
-        # this the guard weakens silently as the corpus grows.
+        # D-20 is WITHDRAWN (its justifying figure was the document_type
+        # column — see DECISIONS.md and F-V3-31); unattributed evidence is now
+        # refused, not disclosed. This metric remains the way to check that
+        # claim against the index instead of against a remembered table, which
+        # is exactly the check that was skipped when D-20 was written.
         unknown = self.con.execute(
             "SELECT COUNT(*) FROM files WHERE project IS NULL OR project='UNKNOWN'"
         ).fetchone()[0]

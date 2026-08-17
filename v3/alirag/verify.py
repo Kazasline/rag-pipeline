@@ -28,6 +28,35 @@ MONEY_RE = re.compile(r"(?:RM|MYR|\$)\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE)
 # "what is the final claim amount" — nobody reads a footnote as disqualifying
 # a figure. For these, UNKNOWN-project evidence alongside a named project
 # escalates to the clarification question.
+# Dates in the forms these documents actually use.
+DATE_RE = re.compile(
+    r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"
+    r"|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{2,4}"
+    r"|\d{4}-\d{2}-\d{2})\b", re.IGNORECASE)
+
+
+def _sensitive_evidence(items: list) -> bool:
+    """Does the EVIDENCE itself carry the kind of fact that must be attributable?
+
+    Round-5 reviewer F5-5: escalation keyed only on query vocabulary, so the
+    same unattributable money chunk escalated for "what is the final claim
+    amount" and merely disclosed for "how much was billed" — and the reviewer
+    listed nine more phrasings that missed. The regex was fixed twice against
+    the examples quoted at it while the class stayed open.
+
+    The verifier already KNOWS the evidence is monetary — MONEY_RE fires on it
+    to build the conflict list. Keying on that is a property of the material,
+    which no rephrasing can evade. The query regex is kept as an ADDITIONAL
+    trigger for questions whose evidence has no number in it (a status, an
+    obligation), not as the primary one.
+    """
+    for e in items:
+        text = e.get("text", "") or ""
+        if MONEY_RE.search(text) or DATE_RE.search(text):
+            return True
+    return False
+
+
 SENSITIVE_INTENT = re.compile(
     r"\b(amount|amounts|sum|total|cost|price|rate|rates|value|quantum|claim|"
     r"claims|payment|invoice|certified|certificate|vo\b|variation|"
@@ -99,7 +128,8 @@ class Verdict:
 def verify(evidence: list[dict], project_hint: str | None = None,
            min_evidence: int = 1, query: str = "",
            cross_project: bool = False,
-           doc_freq: dict | None = None, total_docs: int = 0) -> Verdict:
+           doc_freq: dict | None = None, total_docs: int = 0,
+           known_projects: list | None = None) -> Verdict:
     """`doc_freq`/`total_docs` carry MEASURED corpus statistics (how many
     indexed chunks contain each query term). With them the relevance floor
     drops terms that are common in this corpus rather than terms someone
@@ -144,6 +174,27 @@ def verify(evidence: list[dict], project_hint: str | None = None,
         qterms = content_terms(scoped_query)
         qcodes = _query_doc_codes(query)
 
+        # Terms belonging to ANY project name, not just the hinted one.
+        #
+        # Round-5 reviewer F5-1: two independently conservative mechanisms
+        # composed into a hole. `_project_hint` only fires on a verbatim match,
+        # and the phrase strip only ran when a hint was set — so reordering the
+        # project name ("...for Meridian Towers Dawson?") left the hint None,
+        # nothing stripped, and the project name itself counted as
+        # discriminating evidence. A drawing title block reading only "DAWSON
+        # MERIDIAN TOWERS / Sheet 12 of 40" came back SUPPORTED for "what is
+        # the final claim amount". Whether the floor held depended on the word
+        # order of the question.
+        #
+        # Project-name terms are not subtracted outright — that was N4-5, and
+        # it deleted real evidence when the name was descriptive. They simply
+        # cannot be the ONLY thing an item is admitted on.
+        project_terms = set()
+        for name in (known_projects or []):
+            project_terms |= content_terms(name)
+        if project_hint:
+            project_terms |= content_terms(project_hint)
+
         # The floor FILTERS; it does not merely gate.
         #
         # Round-3 reviewer R3-3: `best_overlap` was a max over all evidence and
@@ -158,6 +209,10 @@ def verify(evidence: list[dict], project_hint: str | None = None,
             good = discriminative_terms(shared, doc_freq, total_docs)
             best = max(best, len(good))
             on_topic = len(good) >= MIN_CONTENT_OVERLAP
+            # ...and at least one of those terms must be about the SUBJECT,
+            # not about which project we are in (§60 handles scope separately).
+            if not good - project_terms:
+                on_topic = False
             if on_topic:
                 passed.append(e)
             elif _names_the_document(e, qcodes):
@@ -252,7 +307,8 @@ def verify(evidence: list[dict], project_hint: str | None = None,
                     if not e.get("project") or e.get("project") == "UNKNOWN"]
     if unattributed:
         names = sorted({e.get("filename", "?") for e in unattributed})
-        sensitive = bool(query and SENSITIVE_INTENT.search(query))
+        sensitive = _sensitive_evidence(kept) or bool(
+            query and SENSITIVE_INTENT.search(query))
         # NOT gated on a known project also being present (round-4 N4-7): an
         # all-UNKNOWN evidence set answering "what is the final claim amount?"
         # was the case that never escalated, and it is the worst one.

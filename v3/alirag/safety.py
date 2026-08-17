@@ -263,11 +263,34 @@ class SafetyGuard:
         return out
 
     # ------------------------------------------------------------ §84 acceptance
+    def _is_excluded_dir(self, path: Path) -> bool:
+        """Is this directory one the operator declared non-knowledge?"""
+        low = {d.lower() for d in self.excluded_dirs}
+        return any(part.lower() in low for part in path.parts)
+
     def _walk_sources(self):
         for root in self.source_roots:
             for dirpath, dirnames, filenames in os.walk(root):
                 dp = Path(dirpath)
                 if self._under(dp, self.workspace):
+                    dirnames[:] = []
+                    continue
+                # Skip directories excluded from indexing.
+                #
+                # Round-5 reviewer F5-3: the walk covered the operator's live
+                # services, so the shipped config — which declares
+                # */hermes/* and */sci_ai_library/* volatile precisely because
+                # they rewrite state continuously — could only ever produce
+                # PASS_WITH_EXCUSES, which the audit then refused. The gate was
+                # unsatisfiable, and an unsatisfiable gate is one the operator
+                # learns to ignore. Excluding them here means their heartbeats
+                # never enter the diff at all, so a genuinely clean PASS is
+                # reachable with no excuse in force.
+                #
+                # This does not weaken §84: these directories hold no documents
+                # (that is what excluding them from indexing asserts), and the
+                # assertion is visible in config rather than buried here.
+                if self._is_excluded_dir(dp):
                     dirnames[:] = []
                     continue
                 for fn in filenames:

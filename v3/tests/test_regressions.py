@@ -58,7 +58,12 @@ def test_verify_attributes_external_writers(tmp_path):
     heartbeat = src / "svc" / "ticker.heartbeat"
     heartbeat.write_text("t0", encoding="utf-8")
 
-    guard = SafetyGuard([str(src)], str(tmp_path / "ws"), excluded_dirs=("hermes", "sci_ai_library", "svc", "logs"))
+    # NOTE: "svc" is deliberately NOT in excluded_dirs here. Excluded
+    # directories are skipped by the safety walk entirely (F5-3), so a change
+    # inside one can never be "undeclared but seen" — which is the case this
+    # test is about.
+    guard = SafetyGuard([str(src)], str(tmp_path / "ws"),
+                        excluded_dirs=("hermes", "sci_ai_library"))
     snap = tmp_path / "ws" / "17_REPORTS" / "snap.jsonl"
     snap.parent.mkdir(parents=True, exist_ok=True)
     guard.snapshot(snap)
@@ -76,11 +81,15 @@ def test_verify_attributes_external_writers(tmp_path):
 
     # Once the operator declares the service volatile, it is excused — and the
     # excuse is itself recorded for review.
+    # Excluding the directory both stops the walk seeing it (so the change
+    # cannot recur) and, for the entries already in this older snapshot, routes
+    # them through the declared allowlist rather than reporting a deletion.
+    guard.excluded_dirs = ("hermes", "sci_ai_library", "svc")
     guard.allow_volatile(["*/svc/*"])
     declared = guard.verify_snapshot(snap)
     assert declared["pass"] is True
-    assert str(heartbeat) in declared["allowlisted_modified"]
-    assert declared["rag_modified"] == []
+    assert str(heartbeat) in declared["allowlisted_deleted"]
+    assert declared["rag_modified"] == [] and declared["rag_deleted"] == []
 
 
 def test_verify_still_fails_on_rag_attributable_change(tmp_path):

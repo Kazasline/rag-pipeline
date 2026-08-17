@@ -31,7 +31,8 @@ EMBED_BATCH = 48   # V1-proven batch size for Ollama embed calls
 class Ingestor:
     def __init__(self, cfg: Config, mf: Manifest | None = None):
         self.cfg = cfg
-        self.guard = SafetyGuard(cfg.source_roots, cfg.workspace)
+        self.guard = SafetyGuard(cfg.source_roots, cfg.workspace,
+                                 excluded_dirs=cfg.ingest.exclude_dirs)
         self.mf = mf or Manifest(cfg.manifest_db)
         self.sparse = SparseIndex(cfg.sparse_db)
         self.dense = make_dense(cfg)

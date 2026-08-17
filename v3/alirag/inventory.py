@@ -177,11 +177,17 @@ def reinfer_metadata(cfg: Config, mf: Manifest) -> dict:
         meta = infer_metadata(path, root)
         if any(meta[k] != r[k] for k in
                ("project", "document_type", "discipline", "revision")):
+            # project_source MUST move with project. Round-5 reviewer F5-7:
+            # omitting it here left the old provenance attached to a new value,
+            # so a manually confirmed 'content' attribution survived a re-infer
+            # that had just replaced the project with a folder guess — the
+            # citation then asserted the guess had been confirmed from document
+            # content. §4 violated by the very column added to satisfy §4.
             mf.con.execute(
-                "UPDATE files SET project=?, document_type=?, discipline=?, "
-                "revision=? WHERE file_id=?",
-                (meta["project"], meta["document_type"], meta["discipline"],
-                 meta["revision"], r["file_id"]))
+                "UPDATE files SET project=?, project_source=?, document_type=?, "
+                "discipline=?, revision=? WHERE file_id=?",
+                (meta["project"], meta["project_source"], meta["document_type"],
+                 meta["discipline"], meta["revision"], r["file_id"]))
             changed += 1
     # revision links may shift once revisions are re-read
     mf.con.execute("UPDATE files SET supersedes=NULL, superseded_by=NULL")
