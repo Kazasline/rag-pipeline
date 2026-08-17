@@ -22,6 +22,40 @@ from dataclasses import dataclass, field
 
 MONEY_RE = re.compile(r"(?:RM|MYR|\$)\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE)
 
+# Distinct content terms a chunk must share with the query before dense-only
+# evidence counts as relevant. 2 rather than 1: one incidental word in common
+# is coincidence at corpus scale.
+MIN_CONTENT_OVERLAP = 2
+
+# Function words carry no topical signal, in either language this corpus uses.
+# Without this list the floor was satisfied by "the", "for", "what", "yang".
+STOPWORDS = {
+    # English
+    "the", "and", "for", "are", "was", "were", "with", "this", "that", "from",
+    "have", "has", "had", "not", "but", "you", "your", "our", "their", "its",
+    "what", "which", "who", "whom", "when", "where", "why", "how", "all", "any",
+    "can", "will", "would", "should", "could", "there", "here", "than", "then",
+    "into", "onto", "out", "off", "over", "under", "about", "been", "being",
+    "does", "did", "done", "get", "got", "per", "via", "such", "some", "each",
+    "more", "most", "other", "only", "own", "same", "too", "very", "just",
+    # Malay
+    "yang", "dan", "untuk", "adalah", "ialah", "dengan", "ini", "itu", "dari",
+    "daripada", "pada", "ada", "tidak", "tak", "atau", "juga", "akan", "boleh",
+    "apa", "mana", "siapa", "bila", "kenapa", "mengapa", "bagaimana", "semua",
+    "saya", "anda", "kita", "kami", "mereka", "dalam", "oleh", "kepada",
+    "sebagai", "telah", "sudah", "masih", "lagi", "sahaja", "cari", "berapa",
+    "jumlah", "senarai",
+}
+
+
+def _content_terms(text: str) -> set:
+    """Topical terms only: alphanumeric tokens of 3+ chars, minus stopwords.
+
+    Codes like `LAI-003` survive because the pattern keeps internal hyphens.
+    """
+    toks = re.findall(r"[A-Za-z0-9][\w\-]{2,}", text.lower())
+    return {t for t in toks if t not in STOPWORDS}
+
 
 @dataclass
 class Verdict:
@@ -40,24 +74,40 @@ def verify(evidence: list[dict], project_hint: str | None = None,
     if not kept:
         return Verdict("INSUFFICIENT", [], ["no evidence retrieved"], [])
 
-    # ---- relevance floor (§39): dense retrieval ALWAYS returns nearest
-    # neighbors, even for a query about nothing in the corpus. If no evidence
-    # item came from a lexical leg (exact/sparse = actual term match) AND no
-    # item shares a single meaningful query term, the evidence is neighbors,
-    # not answers -> INSUFFICIENT. (A cross-language paraphrase normally still
-    # shares codes/names/project tokens; if this floor ever misfires, DEEP
-    # retrieval with real embeddings is the sanctioned escalation, §16.)
+    # ---- relevance floor (§39)
+    #
+    # Dense retrieval always returns nearest neighbours, so "we got results" is
+    # not evidence of anything. An earlier version accepted any shared 3+ char
+    # token, which the reviewer showed meant the word "the" was enough: a
+    # question about pump warranties returned chunks about rain trees and was
+    # marked SUPPORTED. Stopwords are now removed and a single incidental word
+    # is not sufficient — a lexical-leg hit (the term was actually matched in
+    # the index) or at least MIN_CONTENT_OVERLAP distinct content terms in one
+    # chunk is required.
+    #
+    # Deliberate trade-off: a cross-language paraphrase sharing no content term
+    # and matched only by embedding will be refused rather than answered. §39
+    # prefers a refusal to a fabrication, and DEEP is the sanctioned escalation
+    # (§16). Retune against the benchmark, not by intuition.
     if query:
-        qterms = {w.lower() for w in re.findall(r"[A-Za-z0-9][\w\-]{2,}", query)}
+        qterms = _content_terms(query)
         lexical_hit = any(set(e.get("sources", [])) & {"exact", "sparse"}
                           for e in kept)
-        overlap_hit = any(qterms & set(re.findall(r"[a-z0-9][\w\-]{2,}",
-                                                  e.get("text", "").lower()))
-                          for e in kept) if qterms else True
-        if not lexical_hit and not overlap_hit:
+        best_overlap = 0
+        if qterms:
+            for e in kept:
+                overlap = len(qterms & _content_terms(e.get("text", "")))
+                best_overlap = max(best_overlap, overlap)
+        # A query with NO content terms ("the", "apa yang ada dalam ini?") has
+        # nothing to match on, so dense neighbours cannot be evidence for it
+        # either — that must not count as passing the floor.
+        enough_overlap = bool(qterms) and best_overlap >= MIN_CONTENT_OVERLAP
+        if not lexical_hit and not enough_overlap:
             return Verdict("INSUFFICIENT", kept,
-                           ["retrieved items are nearest neighbors only — no "
-                            "lexical or term-level connection to the query"], [])
+                           [f"no lexical match and only {best_overlap} content "
+                            f"term(s) shared with the query (need "
+                            f"{MIN_CONTENT_OVERLAP}) — the retrieved items are "
+                            "nearest neighbours, not evidence"], [])
 
     # ---- project isolation (§60)
     projects = {e.get("project") for e in kept if e.get("project")

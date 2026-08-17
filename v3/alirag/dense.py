@@ -74,11 +74,30 @@ class MemmapDense:
         vecs = np.memmap(self.vec_path, dtype="float32", mode="r", shape=(n, self.dim))
         q = np.asarray(qvec, dtype="float32")
         scores = vecs @ q
+
+        # Apply the project filter BEFORE selecting top-k, not after.
+        #
+        # Filtering afterwards silently empties the dense leg at scale: over a
+        # 662k-file corpus where one project is a small fraction, the top few
+        # hundred rows by similarity can contain zero in-project chunks, so
+        # every project-scoped query would return nothing from dense — and the
+        # 5-file test fixture could never reveal it.
+        if allowed_chunks is not None:
+            mask = np.zeros(n, dtype=bool)
+            for row, cid in enumerate(self._rowmap[:n]):
+                if cid is not None and cid in allowed_chunks:
+                    mask[row] = True
+            if not mask.any():
+                return []
+            scores = np.where(mask, scores, -np.inf)
+
         pool = min(max(k * 6, 64), n)   # over-fetch to skate past orphaned rows
         top = np.argpartition(-scores, pool - 1)[:pool]
         top = top[np.argsort(-scores[top])]
         out = []
         for row in top:
+            if not np.isfinite(scores[row]):
+                break                    # everything below here is filtered out
             cid = self._rowmap[row] if row < len(self._rowmap) else None
             if cid is None:
                 continue

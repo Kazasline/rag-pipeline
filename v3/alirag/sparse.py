@@ -130,15 +130,23 @@ class SparseIndex:
         return [{"chunk_id": int(cid), "score": -float(rank), "source": "sparse"}
                 for cid, rank in rows]
 
-    def search_ids(self, query: str, k: int = 20) -> list[dict]:
+    def search_ids(self, query: str, k: int = 20,
+                   allowed_chunks: set | None = None) -> list[dict]:
         """Exact identifier lookup: any code-like token in the query that
-        matches a harvested code is a top-priority hit (§9 exact path)."""
+        matches a harvested code is a top-priority hit (§9 exact path).
+
+        `allowed_chunks` scopes the leg to one project. It carries the heaviest
+        RRF weight (2.0), so leaving it unscoped let a matching code from
+        another project outrank everything — an isolation hole (§60).
+        """
         hits: dict[int, float] = {}
         for raw in harvest_ids(query, limit=8):
             norm = normalize_id(raw)
             for cid, in_fn in self.con.execute(
                     "SELECT chunk_id, in_filename FROM ids WHERE norm=? LIMIT ?",
-                    (norm, k * 4)):
+                    (norm, k * 8)):
+                if allowed_chunks is not None and cid not in allowed_chunks:
+                    continue
                 # filename matches outrank body mentions
                 hits[cid] = max(hits.get(cid, 0.0), 2.0 if in_fn else 1.0)
         ranked = sorted(hits.items(), key=lambda x: -x[1])[:k]

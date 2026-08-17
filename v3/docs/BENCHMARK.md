@@ -60,8 +60,14 @@ Source: 3 ad-hoc queries via `alirag metrics`. **n=3 — indicative only.**
 | rerank | 0.2 ms | — |
 | **retrieval-only total** | **262 ms** | — |
 
-Retrieval meets the §10 target (~250 ms p95). The dense leg dominates and is
-the only stage worth optimising; sparse, fusion and graph are effectively free.
+**Correction (reviewer, 2026-08-17):** an earlier version of this file said
+"retrieval meets the §10 target (~250 ms p95)". That was wrong twice over: the
+262 ms figure is a sum of per-stage **p50s**, and it was compared against a
+**p95** objective. The measured `dense_search p95` in the same table is
+**1813 ms**, so on this evidence retrieval does **not** meet a 250 ms p95
+target. With n=3, p95 equals the maximum anyway. What can honestly be said:
+sparse, fusion, graph and rerank are negligible (<15 ms combined), and the
+dense leg is the only retrieval stage worth optimising.
 
 ### Generation — the real bottleneck is model loading, not decoding
 

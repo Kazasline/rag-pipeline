@@ -171,8 +171,35 @@ def reinfer_metadata(cfg: Config, mf: Manifest) -> dict:
     mf.con.execute("UPDATE files SET supersedes=NULL, superseded_by=NULL")
     links = link_revision_families(mf)
     mf.commit()
+    # The sparse index denormalizes `project` at write time, so correcting the
+    # manifest alone leaves the sparse leg filtering on stale labels (§60).
+    fts_synced = _sync_sparse_projects(cfg, mf)
     return {"rows_examined": len(rows), "rows_updated": changed,
-            "revision_links": links, "elapsed_s": round(time.time() - t0, 1)}
+            "revision_links": links, "sparse_rows_synced": fts_synced,
+            "elapsed_s": round(time.time() - t0, 1)}
+
+
+def _sync_sparse_projects(cfg: Config, mf: Manifest) -> int:
+    """Push corrected project labels into the sparse index."""
+    from .sparse import SparseIndex
+    try:
+        idx = SparseIndex(cfg.sparse_db)
+    except Exception:
+        return 0
+    n = 0
+    try:
+        for r in mf.con.execute(
+                "SELECT c.chunk_id, f.project FROM chunks c "
+                "JOIN files f ON f.file_id=c.file_id"):
+            idx.con.execute("UPDATE fts SET project=? WHERE chunk_id=?",
+                            (r[1], r[0]))
+            n += 1
+        idx.con.commit()
+    except Exception:
+        return n
+    finally:
+        idx.close()
+    return n
 
 
 def scan(cfg: Config, guard: SafetyGuard, mf: Manifest,

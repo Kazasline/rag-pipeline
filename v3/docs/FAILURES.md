@@ -238,3 +238,87 @@ asserted the buggy string form, so it encoded the defect and was corrected.
 LESSON: two — a fix shipped without exercising the real backend can be worse
 than the bug it replaces; and "unreachable" must never be the label for
 "refused", because it sends diagnosis to the wrong place entirely.
+
+## Independent reviewer, Phase 4 (2026-08-17) — 3 of 6 categories FAILED
+
+An independent reviewer with veto authority audited the code (not the docs) and
+wrote probe harnesses to break the guarantees. DATA_SAFETY, GROUNDING_HONESTY
+and TEST_COVERAGE all failed. Its central finding: the two things the operator
+is asked to trust most were **unfalsifiable rather than proven**, and both were
+asserted in module docstrings the code did not back.
+
+**F-V3-15 / data safety / the §84 guarantee could not fail** — SYMPTOM: the
+reviewer overwrote, deleted and renamed originals through ordinary `open()` /
+`unlink()` / `rename()` and every case reported `pass: True`. ROOT CAUSE:
+attribution asked "is this path in our write journal?", and
+`guarded_write_path()` was called exactly ONCE in the package — by `snapshot()`
+itself. Every real write (`dense.py`, `instrument.py`, `answer.py`, `bench.py`,
+`cli.py`, `extract.py`, …) bypassed it, so `rag_modified` was empty by
+construction and the check passed by default. Compounding faults: (a)
+`"REFUSED_write".endswith("write")` was True, so a BLOCKED attempt counted as
+our write and could fail an innocent run — attribution wrong in both
+directions; (b) `rag_deleted` was mathematically always empty, there being no
+guarded delete anywhere; (c) no move detection existed despite the docstring
+claiming "0 moved"; (d) the snapshot stored only size+mtime, so an in-place
+edit restoring both was invisible to every view; (e) the Builder's own passing
+test produced a failure only by FORGING a journal entry no code path can
+create — it tested the arithmetic, not the guarantee.
+FIX: the model is inverted. Snapshots now carry content hashes; verification
+classifies every difference as rag-attributable, operator-declared volatile, or
+UNEXPLAINED, and `pass` fails on anything in the first or last category.
+Deletions and renames are reconciled by hash. Nothing is excused by default —
+excusing a live service requires `allow_volatile()`, an auditable declaration.
+`guarded_open()` added as a real write helper; the false "every write goes
+through the guard" claim deleted from `__init__.py` rather than left standing.
+RESULT: `tests/test_safety_breach.py` — 8 adversarial tests, all of which
+FAILED against the previous implementation and pass now.
+LESSON: a check that asks "can we prove we did it?" passes whenever it has no
+records. It must ask "can this be accounted for?" and fail when it cannot.
+
+**F-V3-16 / grounding / the relevance floor never fired** — SYMPTOM: the
+reviewer asked "What is the warranty period for the pump?" against a corpus
+containing neither, and got SUPPORTED with four chunks about rain trees; the
+query "the" also passed. ROOT CAUSE: the floor accepted any shared 3+ character
+token with no stopword list, so ordinary function words satisfied it. §39
+protection therefore rested entirely on the LLM obeying its system prompt —
+exactly what a deterministic verifier was supposed to backstop. FIX: stopwords
+(English + Malay) removed before matching, ≥2 distinct content terms required,
+and a query with no content terms at all can no longer pass on the "nothing to
+match" branch. RESULT: `test_relevance_floor_rejects_an_off_corpus_question`,
+`test_relevance_floor_still_accepts_genuine_matches`.
+LESSON: a guard whose threshold is "any token" is not a threshold.
+
+**F-V3-17 / project isolation / three separate leaks (§60)** — (a)
+`retrieve.py` ended the project filter with `or hydrated`, restoring the
+UNFILTERED list whenever filtering emptied it — a deliberate fail-open on the
+isolation boundary; now fails closed. (b) `sparse.search_ids` took no project
+parameter, leaving the exact-ID leg — which carries the heaviest RRF weight
+(2.0) — entirely unscoped; it now accepts `allowed_chunks`. (c)
+`reinfer_metadata` corrected the manifest but not the denormalized `project`
+column in FTS, so after any re-inference the sparse leg filtered on stale
+labels; it now syncs them.
+LESSON: an isolation boundary with a fallback is not a boundary.
+
+**F-V3-18 / dense retrieval / project filter applied after top-k** — the
+memmap backend selected the top-k by similarity and filtered afterwards. Over
+662k files where one project is a small fraction, the top few hundred rows can
+contain zero in-project chunks, so every project-scoped query would silently
+return nothing from the dense leg — invisible on a 5-file fixture. Filtering
+now happens before selection. RESULT: `test_dense_filter_applied_before_topk`.
+LESSON: a defect that only appears at production scale needs a test that
+simulates scale, not one that simulates the feature.
+
+**F-V3-19 / docs / overclaim in BENCHMARK.md** — the file stated "retrieval
+meets the §10 target (~250 ms p95)" while the same table reported
+`dense_search p95 = 1813 ms`. The 262 ms figure was a sum of per-stage p50s
+compared against a p95 objective, from n=3 where p95 equals the maximum. The
+claim is now corrected in place rather than quietly removed.
+LESSON: the one unguarded sentence in an otherwise careful document is the one
+that misleads.
+
+**F-V3-20 / GO_V3.bat / the one-click script never snapshotted** — it ran
+`safety verify` against a baseline written once by `SETUP_V3.bat`, so every
+repeat run verified against a snapshot from first install (covering days of
+unrelated user activity) or crashed if setup had been skipped. The flagship
+script did not perform the snapshot→work→verify sequence it advertised. Fixed:
+it now snapshots immediately before ingest.

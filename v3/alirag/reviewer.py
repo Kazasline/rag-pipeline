@@ -60,7 +60,8 @@ def audit(cfg: Config) -> dict:
     safety = _load_json(_latest("safety_verify*.json", reports))
     item("DATA_SAFETY", _latest("safety_verify*.json", reports),
          None if safety is None else bool(safety.get("pass")),
-         "§84: snapshot re-scan proves 0 originals deleted/modified")
+         "§84: snapshot re-scan accounts for every change; fails on any "
+         "RAG-attributable or unexplained modification/deletion/move")
 
     # per-mode benchmarks (§80–§82)
     for mode in ("FAST", "DEEP", "FULLSWING"):

@@ -66,11 +66,21 @@ def test_verify_attributes_external_writers(tmp_path):
     # another process (not us) rewrites its heartbeat
     heartbeat.write_text("t1 much later", encoding="utf-8")
 
+    # Undeclared, a third-party change is UNEXPLAINED and must fail: the check
+    # cannot tell it apart from a breach, and passing by default is the hole
+    # the reviewer found.
     res = guard.verify_snapshot(snap)
-    assert res["pass"] is True, "external writer must not fail the RAG safety check"
-    assert res["pass_strict"] is False, "strict view must still show the change"
-    assert str(heartbeat) in res["external_modified"]
+    assert res["pass"] is False, "an undeclared change must not be excused"
+    assert str(heartbeat) in res["unexplained_modified"]
     assert res["rag_modified"] == []
+
+    # Once the operator declares the service volatile, it is excused — and the
+    # excuse is itself recorded for review.
+    guard.allow_volatile(["*/svc/*"])
+    declared = guard.verify_snapshot(snap)
+    assert declared["pass"] is True
+    assert str(heartbeat) in declared["allowlisted_modified"]
+    assert declared["rag_modified"] == []
 
 
 def test_verify_still_fails_on_rag_attributable_change(tmp_path):

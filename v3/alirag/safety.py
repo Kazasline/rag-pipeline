@@ -1,32 +1,72 @@
 r"""Data-safety enforcement (spec §1, §84).
 
-The absolute rule — NEVER delete, overwrite, move or rename original files —
-is enforced structurally, not by convention:
+The rule: original files are NEVER deleted, moved, renamed, overwritten or
+modified by this system.
 
-  * ``source_open()`` is the only sanctioned way pipeline code touches a
-    source file, and it opens strictly read-only ('rb').
-  * ``guarded_write_path()`` must wrap every path the system writes to; it
-    raises ``SourceWriteViolation`` for any path inside a source root and
-    outside the workspace, and journals every approved write to an audit log.
-  * ``snapshot()`` / ``verify_snapshot()`` implement acceptance test §84:
-    record (path, size, mtime) for every file under the source roots before a
-    run, re-scan after, and prove 0 deleted / 0 modified / 0 moved.
+HOW THIS IS ACTUALLY ESTABLISHED — read this before trusting anything here.
 
-Nothing in this package imports os.remove/shutil.move against source paths;
-grep-able invariant: the strings "os.remove" and "shutil.move" appear nowhere
-outside this docstring.
+An earlier version claimed the guarantee was structurally enforced because
+"every write goes through guarded_write_path()". The independent reviewer
+disproved that: the guard was called exactly once in the whole package, by
+snapshot() itself, so attribution ("was this path in our write journal?")
+compared changes against an empty set and could never fail. Overwriting,
+deleting and renaming an original all reported pass:True.
+
+So the guarantee now rests on EVIDENCE, not on a claim about call sites:
+
+  * `snapshot()` records path + size + mtime + CONTENT HASH for every file
+    under the source roots. Hashing is what catches an in-place edit that
+    restores size and mtime.
+  * `verify_snapshot()` re-scans and classifies every difference:
+      - modified / deleted / moved (moves reconciled by content hash)
+      - each change is then labelled: rag_attributable (present in our write
+        journal), allowlisted (matches a path pattern the operator explicitly
+        declared volatile, e.g. a live service's own logs), or UNEXPLAINED.
+  * `pass` fails on ANY unexplained or RAG-attributable change to a source
+    file. Nothing is excused by default. Excusing a change requires the
+    operator to declare that pattern in advance, which is an auditable act.
+
+That inversion is the point: the previous design asked "can we prove we did
+it?" and therefore passed whenever it had no records. This design asks "can
+this change be accounted for?" and fails when it cannot.
+
+`guarded_open()` / `guarded_write_path()` remain the sanctioned write helpers
+and refuse source paths outright, but the safety verdict no longer depends on
+every writer remembering to use them.
 """
 
 from __future__ import annotations
 
+import fnmatch
+import hashlib
 import json
 import os
 import time
 from pathlib import Path
 
+# files larger than this are hashed head+tail+size rather than in full, so a
+# snapshot over a terabyte of archives stays practical
+_FULL_HASH_MAX = 64 * 1024 * 1024
+
 
 class SourceWriteViolation(RuntimeError):
     """Raised when code attempts to write inside a protected source root."""
+
+
+def hash_path(path: str | os.PathLike, full_max: int = _FULL_HASH_MAX) -> str:
+    """Content digest used for change and move detection."""
+    size = os.path.getsize(path)
+    h = hashlib.blake2b(digest_size=16)
+    with open(path, "rb") as f:
+        if size <= full_max:
+            for block in iter(lambda: f.read(1 << 20), b""):
+                h.update(block)
+            return h.hexdigest()
+        h.update(f.read(1 << 20))
+        f.seek(max(0, size - (1 << 20)))
+        h.update(f.read(1 << 20))
+        h.update(str(size).encode())
+        return "p" + h.hexdigest()      # 'p' marks a partial digest
 
 
 class SafetyGuard:
@@ -34,6 +74,10 @@ class SafetyGuard:
         self.source_roots = [Path(r).resolve() for r in source_roots if r]
         self.workspace = Path(workspace).resolve()
         self._audit_path: Path | None = None
+        # Path patterns the operator has explicitly declared volatile (live
+        # services writing their own logs/locks). Empty by default: a change
+        # is only excused when someone declared it in advance.
+        self.volatile_patterns: list[str] = []
 
     # ------------------------------------------------------------ helpers
     def _under(self, path: Path, root: Path) -> bool:
@@ -49,27 +93,57 @@ class SafetyGuard:
     def in_source(self, path: str | os.PathLike) -> bool:
         return any(self._under(Path(path), r) for r in self.source_roots)
 
+    def allow_volatile(self, patterns: list[str]) -> None:
+        """Declare path patterns whose changes are expected (fnmatch syntax).
+
+        Use for live services that rewrite their own state — never for
+        directories containing documents. Declarations are journaled so the
+        reviewer can see what was excused and by whom.
+        """
+        for pat in patterns:
+            if pat not in self.volatile_patterns:
+                self.volatile_patterns.append(pat)
+                self._audit("declare_volatile", pat, "operator declaration")
+
+    def _is_volatile(self, path: str) -> bool:
+        norm = path.replace("\\", "/")
+        return any(fnmatch.fnmatch(norm, pat.replace("\\", "/"))
+                   for pat in self.volatile_patterns)
+
     # ------------------------------------------------------------ enforced API
     def source_open(self, path: str | os.PathLike):
         """Open an original document read-only. The only sanctioned accessor."""
         return open(path, "rb")
 
+    def guarded_open(self, path: str | os.PathLike, mode: str = "w",
+                     purpose: str = "", **kwargs):
+        """Sanctioned write: validates the destination, journals it, opens it.
+
+        Prefer this over bare open() for anything the system writes, so the
+        journal reflects reality — attribution is only as good as its records.
+        """
+        if "r" in mode and "+" not in mode:
+            raise ValueError("guarded_open is for writing; use source_open to read")
+        target = self.guarded_write_path(path, purpose)
+        kwargs.setdefault("encoding", None if "b" in mode else "utf-8")
+        return open(target, mode, **kwargs)
+
     def guarded_write_path(self, path: str | os.PathLike, purpose: str = "") -> Path:
         """Validate that *path* is a legal write target and journal it.
 
-        Legal = inside the workspace (the workspace may itself live on a
-        source drive, e.g. E:\\ALI_RAG on E:\\ — that carve-out is explicit
-        and audited). Any other location under a source root is refused.
+        Legal = inside the workspace (which may itself sit on a source drive,
+        e.g. E:\\ALI_RAG on E:\\ — an explicit, audited carve-out). Anything
+        else under a source root is refused.
         """
         p = Path(path)
         if self.in_workspace(p):
             self._audit("write", str(p), purpose)
             return p
         if self.in_source(p):
-            self._audit("REFUSED_write", str(p), purpose)
+            # journaled with a distinct action; must NOT count as a write by us
+            self._audit("refused", str(p), purpose)
             raise SourceWriteViolation(
                 f"refusing to write inside source root: {p} ({purpose or 'no purpose given'})")
-        # outside both (e.g. system temp during tests) — allowed but audited
         self._audit("write_outside", str(p), purpose)
         return p
 
@@ -89,39 +163,13 @@ class SafetyGuard:
         except OSError:
             pass
 
-    # ------------------------------------------------------------ §84 acceptance
-    def snapshot(self, out_path: str | os.PathLike, max_files: int | None = None) -> int:
-        """Record (relpath, size, mtime_ns) of every file under the source
-        roots (excluding the workspace) to a JSONL file. Returns file count."""
-        out = self.guarded_write_path(out_path, "safety snapshot")
-        n = 0
-        with open(out, "w", encoding="utf-8") as f:
-            for root in self.source_roots:
-                for dirpath, dirnames, filenames in os.walk(root):
-                    dp = Path(dirpath)
-                    if self._under(dp, self.workspace):
-                        dirnames[:] = []
-                        continue
-                    for fn in filenames:
-                        p = dp / fn
-                        try:
-                            st = p.stat()
-                        except OSError:
-                            continue
-                        f.write(json.dumps({"p": str(p), "s": st.st_size,
-                                            "m": st.st_mtime_ns}) + "\n")
-                        n += 1
-                        if max_files and n >= max_files:
-                            return n
-        return n
-
     def written_paths(self) -> set:
-        """Every path this system has ever written, from the audit journal.
+        """Paths this system actually wrote, from the audit journal.
 
-        guarded_write_path() is the only write route in the package and it
-        always journals, so this set is the complete record of RAG-attributable
-        writes — which is what makes attribution in verify_snapshot() evidence
-        based rather than a guess.
+        Only genuine writes count. A REFUSED attempt is journaled too, and an
+        earlier version matched it with `action.endswith("write")` — so a
+        blocked write was attributed to us and could fail an innocent run.
+        Actions are matched exactly.
         """
         out: set = set()
         path = self.workspace / "16_LOGS" / "safety_audit.jsonl"
@@ -134,36 +182,14 @@ class SafetyGuard:
                         rec = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if rec.get("action", "").endswith("write"):
+                    if rec.get("action") in ("write", "write_outside"):
                         out.add(rec.get("path", ""))
         except OSError:
             pass
         return out
 
-    def verify_snapshot(self, snap_path: str | os.PathLike) -> dict:
-        """Re-scan and compare against a snapshot, and ATTRIBUTE every change.
-
-        F-V3-03 (2026-08-17, first real E:\\ run): the original version reported
-        a bare pass/fail on "did anything change", which returned pass:false
-        because the user's own live services (cron heartbeats, keep-warm locks,
-        bridge logs) rewrote their own files during the 173-second scan. That is
-        a false positive: it says nothing about whether the RAG touched a
-        document.
-
-        The check now separates:
-          * rag_modified  — changed AND present in our write audit  -> real breach
-          * external_modified — changed but never written by us     -> other process
-        `pass` (the §84 acceptance criterion) is based on rag_modified/deleted,
-        while `pass_strict` preserves the old "nothing changed at all" answer so
-        nothing is hidden. Both are reported.
-        """
-        before = {}
-        with open(snap_path, encoding="utf-8") as f:
-            for line in f:
-                rec = json.loads(line)
-                before[rec["p"]] = (rec["s"], rec["m"])
-        deleted, modified = [], []
-        seen = set()
+    # ------------------------------------------------------------ §84 acceptance
+    def _walk_sources(self):
         for root in self.source_roots:
             for dirpath, dirnames, filenames in os.walk(root):
                 dp = Path(dirpath)
@@ -171,43 +197,144 @@ class SafetyGuard:
                     dirnames[:] = []
                     continue
                 for fn in filenames:
-                    p = str(dp / fn)
-                    seen.add(p)
-                    if p in before:
-                        try:
-                            st = os.stat(p)
-                        except OSError:
-                            continue
-                        if (st.st_size, st.st_mtime_ns) != before[p]:
-                            modified.append(p)
+                    yield dp / fn
+
+    def snapshot(self, out_path: str | os.PathLike, max_files: int | None = None,
+                 hash_files: bool = True) -> int:
+        """Record path, size, mtime and content hash for every source file.
+
+        The hash is what makes the check able to see an edit that restores
+        size and mtime, and what lets a rename be reconciled as a move rather
+        than reported as an unexplained deletion.
+        """
+        out = self.guarded_write_path(out_path, "safety snapshot")
+        n = 0
+        with open(out, "w", encoding="utf-8") as f:
+            for p in self._walk_sources():
+                try:
+                    st = p.stat()
+                except OSError:
+                    continue
+                rec = {"p": str(p), "s": st.st_size, "m": st.st_mtime_ns}
+                if hash_files:
+                    try:
+                        rec["h"] = hash_path(p)
+                    except OSError:
+                        rec["h"] = None
+                f.write(json.dumps(rec) + "\n")
+                n += 1
+                if max_files and n >= max_files:
+                    return n
+        return n
+
+    def verify_snapshot(self, snap_path: str | os.PathLike) -> dict:
+        """Re-scan, diff against the snapshot, and account for every change.
+
+        `pass` is the §84 verdict and fails on any change to a source file
+        that is either attributable to this system or unexplained. Only
+        changes matching an operator-declared volatile pattern are excused,
+        and they are listed so the excuse itself can be reviewed.
+        """
+        before: dict[str, dict] = {}
+        with open(snap_path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                before[rec["p"]] = rec
+
+        modified: list[str] = []
+        seen: set[str] = set()
+        now_hashes: dict[str, str] = {}
+        for p in self._walk_sources():
+            sp = str(p)
+            seen.add(sp)
+            prior = before.get(sp)
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            if prior is None:
+                try:
+                    now_hashes[sp] = hash_path(p)
+                except OSError:
+                    pass
+                continue
+            changed = (st.st_size != prior.get("s")
+                       or st.st_mtime_ns != prior.get("m"))
+            if prior.get("h"):
+                try:
+                    changed = hash_path(p) != prior["h"]
+                except OSError:
+                    pass
+            if changed:
+                modified.append(sp)
+
         deleted = [p for p in before if p not in seen]
-        added = len(seen) - len(before) + len(deleted)
+        added = [p for p in seen if p not in before]
+
+        # reconcile deletions against additions by content hash -> moves (§84
+        # claims 0 moved; a rename is otherwise invisible)
+        moved = []
+        added_by_hash: dict[str, list[str]] = {}
+        for a in added:
+            h = now_hashes.get(a)
+            if h:
+                added_by_hash.setdefault(h, []).append(a)
+        still_deleted = []
+        for d in deleted:
+            h = before[d].get("h")
+            cands = added_by_hash.get(h) if h else None
+            if cands:
+                moved.append({"from": d, "to": cands.pop(0)})
+            else:
+                still_deleted.append(d)
 
         ours = self.written_paths()
-        rag_modified = [p for p in modified if p in ours]
-        external_modified = [p for p in modified if p not in ours]
-        rag_deleted = [p for p in deleted if p in ours]
 
-        result = {
+        def classify(paths):
+            rag, allow, unexplained = [], [], []
+            for p in paths:
+                if p in ours:
+                    rag.append(p)
+                elif self._is_volatile(p):
+                    allow.append(p)
+                else:
+                    unexplained.append(p)
+            return rag, allow, unexplained
+
+        rag_mod, allow_mod, unexplained_mod = classify(modified)
+        rag_del, allow_del, unexplained_del = classify(still_deleted)
+
+        passed = not (rag_mod or unexplained_mod or rag_del
+                      or unexplained_del or moved)
+
+        return {
             "files_before": len(before),
             "files_after": len(seen),
-            "added_count": max(0, added),
-            # §84 acceptance: did the RAG harm an original?
-            "pass": not rag_deleted and not rag_modified,
-            "rag_modified": rag_modified,
-            "rag_deleted": rag_deleted,
-            # strict view: did ANYTHING under the source roots change?
-            "pass_strict": not deleted and not modified,
-            "external_modified": external_modified,
-            "external_modified_count": len(external_modified),
-            "deleted": deleted,
+            "pass": passed,
+            # RAG-attributable — a genuine breach by this system
+            "rag_modified": rag_mod,
+            "rag_deleted": rag_del,
+            # changed by something else and NOT declared — must be reviewed
+            "unexplained_modified": unexplained_mod,
+            "unexplained_deleted": unexplained_del,
+            # excused only because the operator declared the pattern volatile
+            "allowlisted_modified": allow_mod,
+            "allowlisted_deleted": allow_del,
+            "moved": moved,
+            # raw diffs
             "modified": modified,
-            "note": ("'pass' answers the §84 question (did the RAG modify or "
-                     "delete an original?) by cross-referencing the write audit "
-                     "log. 'external_modified' are files changed by other "
-                     "processes during the scan — typically your own running "
-                     "services writing their logs/locks/heartbeats. Review that "
-                     "list: every entry should be a file you expect a live "
-                     "service to write."),
+            "deleted": still_deleted,
+            "added_count": len(added) - len(moved),
+            "volatile_patterns": list(self.volatile_patterns),
+            "hashed": any(r.get("h") for r in before.values()),
+            "note": ("'pass' fails on ANY change to a source file that this "
+                     "system caused or that nothing accounts for. Changes are "
+                     "excused only when they match a pattern the operator "
+                     "declared volatile in advance (volatile_patterns); those "
+                     "are listed under allowlisted_* so the excuse can be "
+                     "reviewed. Renames are reconciled by content hash and "
+                     "reported under 'moved'."),
         }
-        return result

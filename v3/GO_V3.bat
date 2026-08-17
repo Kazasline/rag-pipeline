@@ -72,6 +72,15 @@ echo  [4/8] inventory (incremental)
 echo       [OK] siap
 
 echo.
+echo  [4b/8] snapshot keselamatan SEBELUM ingest
+rem Without a fresh snapshot here, `safety verify` at the end compares against
+rem whatever baseline SETUP_V3 wrote days ago — covering unrelated user
+rem activity, or failing outright if setup was skipped. The snapshot must
+rem bracket the work it is meant to verify.
+"%PY%" -m alirag.cli safety snapshot >> "%REPORT%" 2>&1
+echo       [OK] snapshot diambil
+
+echo.
 echo  [5/8] PILOT ingest - %PILOT% fail (beberapa minit)
 echo       parse + chunk + embed + graph. Progres di bawah:
 >> "%REPORT%" echo.

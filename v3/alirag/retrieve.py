@@ -92,19 +92,20 @@ class Retriever:
                  exact_ids: list[str] | None = None) -> list[dict]:
         legs: list[list[dict]] = []
 
+        # Resolve the project scope FIRST so every leg honours it, including
+        # the exact-ID leg (§60).
+        allowed = self._chunks_for_project(project) if project else None
+
         # exact-ID leg first — cheap, deterministic, and decisive when it hits.
         # Gated on sparse_k so a dense-only baseline (§86) disables ALL lexical legs.
         t0 = time.perf_counter()
-        exact_hits = (self.sparse.search_ids(query, k=policy.sparse_k)
+        exact_hits = (self.sparse.search_ids(query, k=policy.sparse_k,
+                                             allowed_chunks=allowed)
                       if exact_ids and policy.sparse_k > 0 else [])
         trace.stage("exact_search", time.perf_counter() - t0,
                     {"hits": len(exact_hits)})
         if exact_hits:
             legs.append(exact_hits)
-
-        allowed = None
-        if project:
-            allowed = self._chunks_for_project(project)
 
         # sparse ∥ dense (§74)
         def _sparse():
@@ -156,7 +157,12 @@ class Retriever:
         fused = rrf_fuse(legs)[:policy.fused_k]
         hydrated = self.hydrate(fused)
         if allowed is not None:
-            hydrated = [h for h in hydrated if h["chunk_id"] in allowed] or hydrated
+            # Fail CLOSED. This previously ended in `or hydrated`, which
+            # restored the unfiltered list whenever the filter emptied it —
+            # a deliberate fail-open on the §60 isolation boundary. Returning
+            # nothing for a project with no matching evidence is the correct
+            # answer; the verifier then reports INSUFFICIENT.
+            hydrated = [h for h in hydrated if h["chunk_id"] in allowed]
         trace.stage("fusion", time.perf_counter() - t0, {"fused": len(hydrated)})
 
         # optional rerank (DEEP/FULLSWING). Placeholder = lexical-overlap
