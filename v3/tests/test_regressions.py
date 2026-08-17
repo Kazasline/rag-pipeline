@@ -103,3 +103,70 @@ def test_written_paths_reads_audit_log(tmp_path):
     guard = SafetyGuard([str(tmp_path / "src")], str(tmp_path / "ws"))
     target = guard.guarded_write_path(tmp_path / "ws" / "out.txt", "test")
     assert str(target) in guard.written_paths()
+
+
+# ---------------------------------------------------------------- F-V3-06
+def test_cli_print_survives_non_cp1252_characters(capsys):
+    """Retrieved text containing arrows/box chars must not crash the CLI."""
+    from alirag.cli import _print
+    _print({"answer": "zon A → zon B ✓ «detail» 建築", "n": 1})
+    assert "→" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- re-inference
+def test_reinfer_updates_existing_rows_without_rehash(cfg, corpus):
+    """A fix to the inference rules must reach rows already in the manifest,
+    since scan() skips unchanged files."""
+    from alirag.inventory import reinfer_metadata, scan
+    from alirag.manifest import Manifest
+    from alirag.safety import SafetyGuard
+
+    guard = SafetyGuard(cfg.source_roots, cfg.workspace)
+    mf = Manifest(cfg.manifest_db)
+    scan(cfg, guard, mf, progress_every=0)
+
+    # simulate rows carrying stale/incorrect metadata from an older rule set
+    mf.con.execute("UPDATE files SET document_type='MEMO', project='WRONG'")
+    mf.commit()
+
+    res = reinfer_metadata(cfg, mf)
+    assert res["rows_updated"] > 0
+    row = mf.con.execute(
+        "SELECT project, document_type FROM files WHERE filename LIKE 'LAI-003%' LIMIT 1"
+    ).fetchone()
+    assert row["project"] == "Dawson"
+    assert row["document_type"] == "LAI"
+    mf.close()
+
+
+def test_scan_can_be_scoped_to_one_root(cfg, corpus):
+    """--root must narrow the walk so a pilot indexes the right folders."""
+    from alirag.inventory import scan
+    from alirag.manifest import Manifest
+    from alirag.safety import SafetyGuard
+
+    guard = SafetyGuard(cfg.source_roots, cfg.workspace)
+    mf = Manifest(cfg.manifest_db)
+    scan(cfg, guard, mf, progress_every=0, roots=[str(corpus / "Meridian")])
+    paths = [r[0] for r in mf.con.execute("SELECT original_path FROM files")]
+    assert paths, "scoped scan found nothing"
+    assert all("Meridian" in p for p in paths), paths
+    mf.close()
+
+
+def test_ingest_can_be_scoped_by_path(cfg, corpus):
+    """--path must restrict which files a limited ingest actually processes."""
+    from alirag.ingest import Ingestor
+    from alirag.inventory import scan
+    from alirag.manifest import Manifest
+    from alirag.safety import SafetyGuard
+
+    guard = SafetyGuard(cfg.source_roots, cfg.workspace)
+    mf = Manifest(cfg.manifest_db)
+    scan(cfg, guard, mf, progress_every=0)
+    ing = Ingestor(cfg, mf=mf)
+    ing.run(path_prefix=str(corpus / "Meridian"))
+    indexed = [r[0] for r in mf.con.execute(
+        "SELECT original_path FROM files WHERE index_status='INDEXED'")]
+    assert indexed and all("Meridian" in p for p in indexed), indexed
+    ing.close()

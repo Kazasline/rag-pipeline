@@ -138,16 +138,61 @@ def _excluded(dirname: str, cfg: Config) -> bool:
     return dirname.lower() in cfg.ingest.exclude_dirs
 
 
+def reinfer_metadata(cfg: Config, mf: Manifest) -> dict:
+    """Re-apply the path/filename inference rules to files ALREADY in the
+    manifest, without re-hashing.
+
+    Needed because `scan()` skips unchanged files, so a fix to the inference
+    rules (F-V3-04) would otherwise never reach the rows it mislabelled — the
+    bad metadata simply persists. Only inferred fields are rewritten; hashes,
+    states and derived data are untouched.
+    """
+    t0 = time.time()
+    roots = [str(r) for r in cfg.source_roots]
+    changed = 0
+    rows = mf.con.execute(
+        "SELECT file_id, original_path, project, document_type, discipline, "
+        "revision FROM files").fetchall()
+    for r in rows:
+        path = r["original_path"]
+        root = next((x for x in roots if path.lower().startswith(x.lower())), None)
+        if root is None:
+            continue
+        meta = infer_metadata(path, root)
+        if any(meta[k] != r[k] for k in
+               ("project", "document_type", "discipline", "revision")):
+            mf.con.execute(
+                "UPDATE files SET project=?, document_type=?, discipline=?, "
+                "revision=? WHERE file_id=?",
+                (meta["project"], meta["document_type"], meta["discipline"],
+                 meta["revision"], r["file_id"]))
+            changed += 1
+    # revision links may shift once revisions are re-read
+    mf.con.execute("UPDATE files SET supersedes=NULL, superseded_by=NULL")
+    links = link_revision_families(mf)
+    mf.commit()
+    return {"rows_examined": len(rows), "rows_updated": changed,
+            "revision_links": links, "elapsed_s": round(time.time() - t0, 1)}
+
+
 def scan(cfg: Config, guard: SafetyGuard, mf: Manifest,
-         max_files: int | None = None, progress_every: int = 2000) -> dict:
+         max_files: int | None = None, progress_every: int = 2000,
+         roots: list[str] | None = None) -> dict:
     """Full read-only inventory pass. Idempotent and incremental: files whose
-    (path, size, mtime) are unchanged since the last pass skip re-hashing."""
+    (path, size, mtime) are unchanged since the last pass skip re-hashing.
+
+    `roots` narrows the walk to specific folders. That matters in practice:
+    walking a large drive alphabetically can spend the whole file budget on
+    whatever sorts first (here, AI tooling directories) and never reach the
+    actual project documents, so scoping to the folders that hold real work is
+    how a pilot indexes something meaningful.
+    """
     t0 = time.time()
     counts = {"new": 0, "unchanged": 0, "updated": 0, "errors": 0, "seen": 0}
     known = {r["original_path"]: (r["size"], r["mtime_ns"], r["content_hash"], r["hash_kind"])
              for r in mf.con.execute(
                  "SELECT original_path,size,mtime_ns,content_hash,hash_kind FROM files")}
-    for root in cfg.source_roots:
+    for root in (roots if roots else cfg.source_roots):
         root = str(root)
         if not os.path.isdir(root):
             counts.setdefault("missing_roots", []).append(root)

@@ -131,8 +131,17 @@ class Ingestor:
     # ------------------------------------------------------------ run
     def run(self, *, states: tuple = ("CLASSIFIED", "UPDATED"),
             limit: int | None = None, use_docling: bool = False,
-            ocr: bool = False, render_pages: bool = False) -> dict:
+            ocr: bool = False, render_pages: bool = False,
+            project: str | None = None, path_prefix: str | None = None) -> dict:
         todo = self.mf.by_state(*states)
+        # Scoping matters for pilots: without it a limited run just takes the
+        # first N by discovery order, which on a large drive is whatever sorts
+        # first rather than the documents worth indexing.
+        if project:
+            todo = [r for r in todo if (r["project"] or "").lower() == project.lower()]
+        if path_prefix:
+            pre = path_prefix.lower()
+            todo = [r for r in todo if r["original_path"].lower().startswith(pre)]
         if limit:
             todo = todo[:limit]
         counts = {"ok": 0, "failed": 0, "skipped": 0, "empty": 0}

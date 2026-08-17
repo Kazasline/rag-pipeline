@@ -23,13 +23,30 @@ import sys
 import time
 from pathlib import Path
 
+# F-V3-06: the Windows console defaults to cp1252, which cannot encode the
+# arrows/box characters that appear in retrieved document text — printing a
+# result crashed the whole command with UnicodeEncodeError. V1 learned this and
+# reconfigured stdout; V3 did not carry it over. Answers must never be lost to
+# a console encoding.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
 from .config import load_config
 from .manifest import Manifest
 from .safety import SafetyGuard
 
 
 def _print(obj):
-    print(json.dumps(obj, indent=2, ensure_ascii=False, default=str))
+    text = json.dumps(obj, indent=2, ensure_ascii=False, default=str)
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        # last-resort belt and braces if reconfigure() was unavailable
+        enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+        print(text.encode(enc, errors="replace").decode(enc, errors="replace"))
 
 
 def main(argv: list[str] | None = None):
@@ -41,11 +58,20 @@ def main(argv: list[str] | None = None):
     sub.add_parser("inspect")
     p = sub.add_parser("inventory")
     p.add_argument("--max-files", type=int)
+    p.add_argument("--root", action="append",
+                   help="scan only this folder (repeatable); overrides source_roots")
+    p.add_argument("--reinfer", action="store_true",
+                   help="re-apply metadata rules to files already in the manifest "
+                        "(no re-hashing) — use after changing inference rules")
     p = sub.add_parser("ingest")
     p.add_argument("--limit", type=int)
+    p.add_argument("--project", help="only ingest files whose project matches")
+    p.add_argument("--path", help="only ingest files under this path prefix")
     p.add_argument("--docling", action="store_true")
     p.add_argument("--ocr", action="store_true")
     p.add_argument("--render", action="store_true")
+    p = sub.add_parser("failures", help="show why files failed to ingest")
+    p.add_argument("--limit", type=int, default=40)
     p = sub.add_parser("query")
     p.add_argument("text")
     p.add_argument("--mode", choices=["FAST", "DEEP", "FULLSWING"])
@@ -75,10 +101,15 @@ def main(argv: list[str] | None = None):
         return
 
     if args.cmd == "inventory":
-        from .inventory import organization_report, scan
+        from .inventory import organization_report, reinfer_metadata, scan
         guard = SafetyGuard(cfg.source_roots, cfg.workspace)
         mf = Manifest(cfg.manifest_db)
-        counts = scan(cfg, guard, mf, max_files=args.max_files)
+        if args.reinfer:
+            res = reinfer_metadata(cfg, mf)
+            _print({"reinfer": res, "organization": organization_report(mf)})
+            mf.close()
+            return
+        counts = scan(cfg, guard, mf, max_files=args.max_files, roots=args.root)
         report = organization_report(mf)
         out = cfg.dir("reports") / f"inventory_{int(time.time())}.json"
         out.write_text(json.dumps({"counts": counts, "organization": report},
@@ -94,9 +125,30 @@ def main(argv: list[str] | None = None):
         from .ingest import Ingestor
         ing = Ingestor(cfg)
         counts = ing.run(limit=args.limit, use_docling=args.docling,
-                         ocr=args.ocr, render_pages=args.render)
+                         ocr=args.ocr, render_pages=args.render,
+                         project=args.project, path_prefix=args.path)
         _print(counts)
         ing.close()
+        return
+
+    if args.cmd == "failures":  # §78 — a failed document must not disappear
+        mf = Manifest(cfg.manifest_db)
+        rows = mf.con.execute(
+            "SELECT original_path, extension, index_note FROM files "
+            "WHERE index_status='FAILED' LIMIT ?", (args.limit,)).fetchall()
+        by_reason: dict = {}
+        for r in mf.con.execute(
+                "SELECT index_note, COUNT(*) c FROM files WHERE index_status='FAILED' "
+                "GROUP BY index_note ORDER BY c DESC LIMIT 20"):
+            by_reason[(r[0] or "")[:160]] = r[1]
+        by_ext = {r[0]: r[1] for r in mf.con.execute(
+            "SELECT extension, COUNT(*) FROM files WHERE index_status='FAILED' "
+            "GROUP BY extension ORDER BY 2 DESC")}
+        _print({"total_failed": mf.con.execute(
+                    "SELECT COUNT(*) FROM files WHERE index_status='FAILED'").fetchone()[0],
+                "by_reason": by_reason, "by_extension": by_ext,
+                "examples": [{"path": r[0], "ext": r[1], "note": r[2]} for r in rows[:15]]})
+        mf.close()
         return
 
     if args.cmd == "query":

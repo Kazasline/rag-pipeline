@@ -90,3 +90,37 @@ flag for the real state "model present, nothing serving it". RESULT: verified
 against a synthetic model tree; awaiting re-run on the target machine.
 LESSON: "not found by the API I happened to query" is not "not installed" —
 inspect the disk, not just the daemons.
+
+**F-V3-06 / 2026-08-17 / CLI / UnicodeEncodeError killed a query mid-answer** —
+SYMPTOM: `alirag query "deep: ..."` crashed with `'charmap' codec can't encode
+character '\u2192'` after retrieval and generation had already succeeded; the
+answer was lost. ROOT CAUSE: the Windows console defaults to cp1252 and the CLI
+printed JSON with `ensure_ascii=False`, so any arrow, box-drawing or CJK
+character in retrieved document text was unencodable. V1 reconfigured stdout to
+UTF-8 for exactly this reason; V3 did not carry the lesson over. FIX: reconfigure
+stdout/stderr to UTF-8 with `errors="replace"` at CLI import, plus a fallback
+re-encode in `_print`. RESULT: `test_cli_print_survives_non_cp1252_characters`.
+LESSON: an answer that cannot be printed is an answer lost — carry V1's
+platform lessons forward deliberately.
+
+**F-V3-07 / 2026-08-17 / pilot scope / the pilot indexed the wrong corpus** —
+SYMPTOM: after ingesting 300 files, every retrieved source was llama.cpp build
+output and AI tooling notes (`compile_commands.json`, `qwen36-ali-system.txt`);
+knowledge extensions were 5,139 `.md` and only 64 `.pdf`, and the user's actual
+project documents under `E:\SITE CONCEPT INTERNATIONAL\` were never reached.
+ROOT CAUSE: `scan()` walks source roots alphabetically and a capped pilot spends
+its whole budget on whatever sorts first — here `E:\AI` and `E:\AI MAIN
+MEMORY`. Ingestion then processes in discovery order, inheriting the same bias.
+FIX: `inventory --root` scopes the walk; `ingest --project/--path` scopes
+processing. RESULT: `test_scan_can_be_scoped_to_one_root`,
+`test_ingest_can_be_scoped_by_path`.
+LESSON: a capped pass over a large drive samples the alphabet, not the corpus.
+
+**F-V3-08 / 2026-08-17 / inventory / a metadata fix could not reach existing
+rows** — SYMPTOM: after fixing F-V3-04, a re-scan still reported 13,647 MEMO
+files. ROOT CAUSE: `scan()` skips files whose path+size+mtime are unchanged, so
+corrected inference rules never touched the rows they had mislabelled — the bad
+metadata was effectively frozen. FIX: `inventory --reinfer` re-applies the rules
+to manifest rows without re-hashing, and rebuilds revision links. RESULT:
+`test_reinfer_updates_existing_rows_without_rehash`.
+LESSON: incremental-by-content means rule changes need their own migration path.
