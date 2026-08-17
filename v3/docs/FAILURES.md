@@ -871,3 +871,20 @@ LESSON: this is the second time (after N4-3b) that "unguarded fix" turned out
 to mean "unreachable code". The matrix cannot tell those apart, so a GREEN
 result is a question — is this untested, or is it dead? — and both answers
 require an edit.
+
+**F-V3-50 / test coverage / masking, a third and fourth time** — the same round
+produced two more instances of F-V3-48's pattern, both in the audit gate.
+`N4-6c` (the audit must refuse a FAILed safety verdict) was unguarded because
+the test covering it wrote a report with no `hashed` key: the audit refused it
+for THAT reason and never reached the verdict comparison. `N4-6d` (documents
+changed inside an excluded directory) was unguarded because no test supplied a
+report where that field was the only thing wrong. Both now use artifacts in
+which every other field is valid, so only the mechanism under test can decide
+the outcome.
+LESSON: a test that asserts a REFUSAL proves nothing unless the input is
+otherwise acceptable. "It said no" is not evidence about which check said it.
+This is the same error as testing a floor with evidence that fails three
+different ways — and it is now the fourth distinct instance this round, which
+suggests it is not a slip but a habit worth naming: **when asserting that a
+guard rejects something, make the input valid in every respect except the one
+under test.**

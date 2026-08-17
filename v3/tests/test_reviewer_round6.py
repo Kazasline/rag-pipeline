@@ -291,3 +291,45 @@ def test_naming_a_file_caps_a_non_quantitative_answer_at_partial():
     v = verify(ev, query="which planting zones does drawing L-201 cover?")
     assert v.status == "PARTIAL", (v.status, v.flags)
     assert any("not because its content answers" in f for f in v.flags), v.flags
+
+
+def test_audit_refuses_a_failed_safety_verdict_on_its_own_merits(tmp_path: Path):
+    """The matrix found N4-6c unguarded: the existing test wrote a report with
+    no `hashed` key, so the audit refused it for THAT reason and the verdict
+    check was never exercised. Every other field is valid here, so only the
+    verdict can decide."""
+    from alirag import reviewer
+    cfg = Config(workspace=str(tmp_path / "ws"), source_roots=[str(tmp_path)],
+                 embed=EmbedConfig(provider="hash", dim=256))
+    good = {"pass": True, "hashed": True, "verdict": "PASS", "files_before": 9,
+            "excluded_dirs": [], "excluded_dir_modified": [],
+            "excluded_dir_deleted": [], "excluded_dir_documents_modified": [],
+            "excluded_dir_documents_deleted": []}
+    (cfg.dir("reports") / "safety_verify_1.json").write_text(
+        __import__("json").dumps(good), encoding="utf-8")
+    assert reviewer.audit(cfg)["items"]["DATA_SAFETY"]["status"] == "PASS"
+
+    (cfg.dir("reports") / "safety_verify_2.json").write_text(
+        __import__("json").dumps({**good, "pass": False, "verdict": "FAIL"}),
+        encoding="utf-8")
+    assert reviewer.audit(cfg)["items"]["DATA_SAFETY"]["status"] == "FAIL"
+
+
+def test_audit_refuses_when_documents_changed_inside_an_excluded_dir(tmp_path: Path):
+    """An exclusion overlapping the corpus is a configuration error, not a live
+    service: the operator is losing indexing AND safety coverage on real
+    documents. The verdict alone will not catch it, because the safety check
+    reports `pass: False` for it — the audit must refuse on this field too, so
+    a hand-assembled or older-format artifact cannot slip through."""
+    from alirag import reviewer
+    cfg = Config(workspace=str(tmp_path / "ws"), source_roots=[str(tmp_path)],
+                 embed=EmbedConfig(provider="hash", dim=256))
+    (cfg.dir("reports") / "safety_verify_1.json").write_text(
+        __import__("json").dumps({
+            "pass": True, "hashed": True, "verdict": "PASS_WITH_EXCLUSIONS",
+            "files_before": 9, "excluded_dirs": ["models"],
+            "excluded_dir_modified": ["E:/Dawson/Models/Tender.pdf"],
+            "excluded_dir_deleted": [],
+            "excluded_dir_documents_modified": ["E:/Dawson/Models/Tender.pdf"],
+            "excluded_dir_documents_deleted": []}), encoding="utf-8")
+    assert reviewer.audit(cfg)["items"]["DATA_SAFETY"]["status"] == "FAIL"
