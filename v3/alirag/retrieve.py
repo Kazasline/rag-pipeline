@@ -199,13 +199,17 @@ def _lexical_tiebreak(query: str, hits: list[dict]) -> list[dict]:
     match anything), and matching is word-boundary rather than substring (so
     "cost" no longer matches "costume").
     """
-    import re as _re
-    qterms = {w.lower() for w in _re.findall(r"\w+", query) if len(w) > 2}
+    # Round-3 reviewer R3-10: this had its own private tokenizer with no
+    # stopword list, so DEEP/FULLSWING ranking was nudged by "the", "and",
+    # "for" — a third definition of "word" in a system whose worst grounding
+    # defect came from having two. There is now one, in terms.py.
+    from .terms import content_terms
+    qterms = content_terms(query)
     if not qterms:
         return hits
     rescored = []
     for h in hits:
-        words = set(_re.findall(r"\w+", h["text"].lower()))
+        words = content_terms(h["text"])
         overlap = len(qterms & words) / len(qterms)
         rescored.append({**h, "lexical_overlap": round(overlap, 3),
                          "score": h["score"] * (1.0 + overlap)})

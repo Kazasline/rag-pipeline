@@ -84,3 +84,30 @@ reviewer's revert matrix except where noted:
 
 Test suite 56 → 139. Every fix above was re-run with the fix reverted to
 confirm its test goes red.
+
+
+## 2026-08-17 (later still) — round-3 audit
+
+**FAIL, 2 of 6 categories** (RETRIEVAL_QUALITY, GROUNDING/CITATIONS), with
+DATA_SAFETY and TEST_COVERAGE conditional and DOCUMENTATION_HONESTY passing.
+The reviewer re-ran its own revert matrix across 22 fixes and found 19 red,
+confirmed no code path touches a source file, and accepted the D-20
+unattributed-evidence deviation with three conditions.
+
+Fixed: three routes past the relevance floor (body-mentioned codes,
+per-set rather than per-item gating, and generic domain vocabulary);
+cross-project consent narrowed from a greedy regex to anchored phrases;
+volatile patterns bounded so the §84 escape hatch cannot excuse a document;
+`PASS_WITH_EXCUSES` separated from `PASS`; the audit now cites the artifact it
+graded; the project-label sync fails loudly instead of silently restoring an
+isolation leak; the duplicate-question key normalizes punctuation; the third
+private tokenizer removed. See FAILURES.md F-V3-26..30.
+
+The relevance floor now weights shared terms by MEASURED document frequency
+from the index rather than by a count, falling back to a word list only when
+the corpus is too small for a frequency to mean anything — and labelling the
+result when it does.
+
+Test suite 139 → 179. All 17 round-3 fixes were individually reverted and
+their tests observed to fail; two tests that did not bite on revert were
+rewritten until they did.

@@ -54,14 +54,30 @@ FULLSWING_INTENT = [
 ]
 
 # Explicit permission to answer from more than one project at once (§60).
-# Without one of these, evidence spanning several projects is treated as an
-# ambiguous question, not as material to merge into a single answer.
+#
+# This single switch disables the AMBIGUOUS_PROJECT guard, so it must be a
+# DELIBERATE instruction and nothing else. Round-3 reviewer R3-1: the list
+# previously held `\bcompare\b.*\bprojects?\b` — a greedy `.*` across the whole
+# query — and `\bany project\b`, so ordinary questions consented on the user's
+# behalf:
+#
+#   "compare the rain tree diameter with the turf spec in this project"  -> merged
+#   "compare revision R00 and R01 of the tender for the project"         -> merged
+#   "does any project document mention a defects liability period?"      -> merged
+#
+# The last one is not even about multiple projects. Dawson's and Meridian's
+# claim amounts were then packed into one prompt, labelled "as asked".
+#
+# Every pattern here is now an ANCHORED phrase that a person can only write on
+# purpose. When in doubt the system asks — that path exists and works.
 CROSS_PROJECT_INTENT = [
-    r"\bacross (all|every|multiple|both) projects?\b",
-    r"\ball projects\b", r"\bevery project\b", r"\bany project\b",
-    r"\bcompare\b.*\bprojects?\b", r"\bprojects?\b.*\bcompare\b",
-    r"\bsemua projek\b", r"\bmerentas projek\b", r"\bsetiap projek\b",
-    r"\bbanding\w*\b.*\bprojek\b",
+    r"\bacross (all|every|multiple|both|the) projects\b",
+    r"\b(for|from|in|over) all (the )?projects\b",
+    r"\ball projects\b", r"\bevery project\b",
+    r"\bcompare (all|the|these|both|multiple) projects\b",
+    r"\bcompare projects\b", r"\bproject[- ]by[- ]project\b",
+    r"\bmerentas (semua )?projek\b", r"\bsemua projek\b",
+    r"\bsetiap projek\b", r"\bbanding\w* (semua|antara) projek\b",
 ]
 
 # leading command forms: "fast:", "cepat -", "deep check ...", "phd:"

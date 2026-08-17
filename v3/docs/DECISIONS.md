@@ -130,3 +130,30 @@ default and is still what LM Studio / llama.cpp / vLLM / SGLang use, so
 `api_style` keeps both without forking the client. Revisit: if Ollama's shim
 gains real `think` support, or if the backend shootout (§33) moves serving to
 llama.cpp, where the OpenAI path applies again.
+
+
+**D-20 — Unattributed (`project=UNKNOWN`) evidence is disclosed, not refused.**
+Alternatives: (a) refuse to co-mingle UNKNOWN evidence with a named project and
+return the §60 clarification question — what the round-2 reviewer instructed;
+(b) drop UNKNOWN evidence silently; (c) treat UNKNOWN as "no objection", which
+is what the code did before round 2 and is indefensible.
+
+Chosen: disclose by filename, cap the verdict at PARTIAL, and escalate to
+`AMBIGUOUS_PROJECT` for the question classes where an unattributable source is
+itself the harm (monetary amounts, dates, statuses, clause obligations —
+`verify.SENSITIVE_INTENT`).
+
+Why not (a) everywhere: **43,897 of ~45,000 inventoried files carry
+`project=UNKNOWN`** (measured, PROJECT_STATE.md, after the real `--reinfer`
+run). At that ratio the strict rule returns a clarification question to nearly
+every query, and a guard that makes the product unusable gets switched off —
+at which point it protects nothing. This overrides an explicit reviewer
+instruction, which is why it is written down here rather than left in a
+docstring; the round-3 reviewer accepted it with three conditions, all
+implemented: the sensitive-intent escalation above, this entry, and
+`project_unknown_pct` in `alirag status`.
+
+REVISIT when UNKNOWN drops below 40% of indexed files — at that point the
+strict rule costs little and should be adopted. Until then, watch
+`project_unknown_pct`: this decision is only as defensible as that number is
+visible.

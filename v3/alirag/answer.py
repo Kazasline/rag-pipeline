@@ -107,6 +107,23 @@ class Engine:
         digest = hashlib.blake2b(shape.encode("utf-8"), digest_size=8).hexdigest()
         return f"{row[0]}:{row[1]}:{digest}"
 
+    # ------------------------------------------------------------ term stats
+    def _term_stats(self, query: str) -> tuple[dict | None, int]:
+        """(document frequency per query term, total indexed chunks).
+
+        Returns (None, 0) if the index cannot answer, so the verifier falls
+        back to its boilerplate list and LABELS the result as unmeasured rather
+        than presenting a guess as a measurement.
+        """
+        from .terms import content_terms
+        try:
+            total = self.sparse.total_chunks()
+            if not total:
+                return None, 0
+            return self.sparse.doc_freq(content_terms(query)), total
+        except Exception:  # noqa: BLE001 — statistics are an enhancement
+            return None, 0
+
     # ------------------------------------------------------------ main
     def query(self, query: str, mode_override: str | None = None,
               use_llm: bool = True, use_cache: bool = True) -> dict:
@@ -153,8 +170,14 @@ class Engine:
         # verifier runs in every mode: it is pure Python over already-fetched
         # rows (microseconds), and wrong-project control (§60) matters in FAST
         # just as much as in DEEP — only the LLM-side depth differs per mode.
+        # Measured corpus statistics for the relevance floor: how common each
+        # query term is in the actual index. Without these the floor falls back
+        # to a hand-written boilerplate list, which is a guess about the corpus
+        # rather than a fact about it.
+        df, ndocs = self._term_stats(r.cleaned_query)
         verdict = verify(evidence, project_hint=r.project_hint,
-                         query=r.cleaned_query, cross_project=r.cross_project)
+                         query=r.cleaned_query, cross_project=r.cross_project,
+                         doc_freq=df, total_docs=ndocs)
         trace.set("evidence_status", verdict.status)
         trace.set("verifier_flags", verdict.flags)
 
@@ -177,7 +200,8 @@ class Engine:
                 # a strict subset of the evidence actually used.
                 verdict = verify(combined, project_hint=r.project_hint,
                                  query=r.cleaned_query,
-                                 cross_project=r.cross_project)
+                                 cross_project=r.cross_project,
+                                 doc_freq=df, total_docs=ndocs)
                 trace.set("second_pass", True)
                 trace.set("evidence_status", verdict.status)
                 trace.set("verifier_flags", verdict.flags)

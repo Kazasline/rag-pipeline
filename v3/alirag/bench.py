@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 import time
 from pathlib import Path
 
@@ -143,10 +144,17 @@ def _load_questions(path: Path) -> list[dict]:
 
     # Round-2 reviewer N5: 25 copies of one question satisfied every honesty
     # gate — n>=20 for meaningful percentiles, recall 1.0, wrong-project 0.0.
+    # Normalize before comparing. Round-3 reviewer R3-5: the key was
+    # `" ".join(q.lower().split())`, so 25 copies of one question with rotating
+    # trailing punctuation were accepted as 25 distinct questions — clearing
+    # MIN_DISTINCT_QUESTIONS, MIN_BENCH_QUESTIONS and percentiles_meaningful,
+    # i.e. every gate this check exists to hold.
+    def _norm(q: str) -> str:
+        return " ".join(re.sub(r"[^\w\s]", " ", q.lower()).split())
+
     seen: dict[str, int] = {}
     for rec in qs:
-        key = " ".join(rec["q"].lower().split())
-        seen[key] = seen.get(key, 0) + 1
+        seen[_norm(rec["q"])] = seen.get(_norm(rec["q"]), 0) + 1
     dupes = {q: c for q, c in seen.items() if c > 1}
     if dupes:
         worst = max(dupes.items(), key=lambda kv: kv[1])

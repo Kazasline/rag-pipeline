@@ -22,6 +22,21 @@ from dataclasses import dataclass, field
 
 MONEY_RE = re.compile(r"(?:RM|MYR|\$)\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE)
 
+# Questions where an answer from an unattributable document is a §60
+# wrong-project answer, not a caveat. Round-3 reviewer, N3 condition 1: a
+# PARTIAL on "what locations are shown" is a different risk from a PARTIAL on
+# "what is the final claim amount" — nobody reads a footnote as disqualifying
+# a figure. For these, UNKNOWN-project evidence alongside a named project
+# escalates to the clarification question.
+SENSITIVE_INTENT = re.compile(
+    r"\b(amount|amounts|sum|total|cost|price|rate|rates|value|quantum|claim|"
+    r"claims|payment|invoice|certified|certificate|vo\b|variation|"
+    r"date|dated|deadline|due|completion|extension|eot\b|"
+    r"status|approved|rejected|outstanding|liability|penalty|lad\b|"
+    r"clause|obligation|entitled|entitlement|warranty|defects|retention|"
+    r"jumlah|harga|kos|nilai|tuntutan|bayaran|tarikh|tempoh|status)\b",
+    re.IGNORECASE)
+
 # Distinct content terms a chunk must share with the query before dense-only
 # evidence counts as relevant. 2 rather than 1: one incidental word in common
 # is coincidence at corpus scale.
@@ -29,25 +44,35 @@ MIN_CONTENT_OVERLAP = 2
 
 # The stopword list and tokenizer are SHARED with the lexical index (terms.py).
 # They disagreed before, and the disagreement was the whole defect.
-from .sparse import harvest_ids, normalize_id  # noqa: E402
-from .terms import STOPWORDS, content_terms  # noqa: E402,F401
+from .sparse import harvest_ids, is_document_code, normalize_id  # noqa: E402
+from .terms import (  # noqa: E402,F401
+    STOPWORDS, content_terms, df_is_meaningful, discriminative_terms,
+)
 
 _content_terms = content_terms   # retained: referenced by existing tests
 
 
-def _carries_code(evidence: dict, query: str) -> bool:
-    """True when a document code present in the QUERY is also present in the
-    EVIDENCE (filename or text), compared on normalized form.
+def _query_doc_codes(query: str) -> set:
+    """Normalized codes in the query that could IDENTIFY a document."""
+    return {normalize_id(c) for c in harvest_ids(query, limit=8)
+            if is_document_code(c)}
 
-    This is what makes an exact-leg hit self-justifying. Trusting the leg's
-    label instead would mean the verifier certifies whatever the retriever
-    claims — and the retriever is one of the things it exists to check.
+
+def _names_the_document(evidence: dict, qcodes: set) -> bool:
+    """True when a document code from the query appears in the evidence's
+    FILENAME — i.e. the user named this document.
+
+    Filename-anchored, not body-anchored. Round-3 reviewer R3-2: matching a
+    code mentioned anywhere in the body let "what is the pump warranty period
+    on drawing L-201?" be answered from a tender spec that merely cross-refers
+    to L-201 and says nothing about pumps. A body mention is a REFERENCE to a
+    document; only the filename is the document's IDENTITY, and identity is
+    what justifies returning a document the user asked for by name.
     """
-    qcodes = {normalize_id(c) for c in harvest_ids(query, limit=8)}
     if not qcodes:
         return False
-    hay = f"{evidence.get('filename', '')} {evidence.get('text', '')}"
-    return bool(qcodes & {normalize_id(c) for c in harvest_ids(hay, limit=60)})
+    fn = evidence.get("filename", "") or ""
+    return bool(qcodes & {normalize_id(c) for c in harvest_ids(fn, limit=20)})
 
 
 @dataclass
@@ -62,7 +87,13 @@ class Verdict:
 
 def verify(evidence: list[dict], project_hint: str | None = None,
            min_evidence: int = 1, query: str = "",
-           cross_project: bool = False) -> Verdict:
+           cross_project: bool = False,
+           doc_freq: dict | None = None, total_docs: int = 0) -> Verdict:
+    """`doc_freq`/`total_docs` carry MEASURED corpus statistics (how many
+    indexed chunks contain each query term). With them the relevance floor
+    drops terms that are common in this corpus rather than terms someone
+    guessed would be common; without them it falls back to a hand-written
+    boilerplate list and says so in the flag."""
     flags: list[str] = []
     conflicts: list[str] = []
     kept = list(evidence)
@@ -87,36 +118,44 @@ def verify(evidence: list[dict], project_hint: str | None = None,
     # (§16). Retune against the benchmark, not by intuition.
     if query:
         qterms = content_terms(query)
-        best_overlap = 0
-        if qterms:
-            for e in kept:
-                overlap = len(qterms & content_terms(e.get("text", "")))
-                best_overlap = max(best_overlap, overlap)
-        # A query with NO content terms ("the", "apa yang ada dalam ini?") has
-        # nothing to match on, so dense neighbours cannot be evidence for it
-        # either — that must not count as passing the floor.
-        enough_overlap = bool(qterms) and best_overlap >= MIN_CONTENT_OVERLAP
+        qcodes = _query_doc_codes(query)
+        # Terms that only restate the SCOPE of the question, not its subject.
+        scope_terms = content_terms(project_hint or "")
 
-        # An exact-ID hit is the ONE standalone pass, and only when verified
-        # here rather than taken on trust: the query must contain a document
-        # code and the evidence must actually carry that same normalized code.
-        # "Find LAI-003" is legitimately answered by one term.
+        # The floor FILTERS; it does not merely gate.
         #
-        # A SPARSE hit grants nothing on its own. It used to: `lexical_hit`
-        # meant "the sparse leg returned rows", and since the FTS expression
-        # ORs every token, a document matching only `the` satisfied the floor
-        # and an off-corpus question came back SUPPORTED. Stopwords are now
-        # stripped from the FTS query too, but the verifier must not depend on
-        # the retriever's tokenizer being right — it checks the terms itself.
-        exact_hit = any("exact" in (e.get("sources") or []) and _carries_code(e, query)
-                        for e in kept)
+        # Round-3 reviewer R3-3: `best_overlap` was a max over all evidence and
+        # the exact-code check was an `any(...)`, so ONE qualifying item let the
+        # whole set through. Unrelated chunks were then hydrated into `sources`
+        # with full §40 provenance and packed into the prompt having met no
+        # floor of their own — the citation list said they were evidence.
+        passed, dropped, best = [], 0, 0
+        for e in kept:
+            shared = qterms & content_terms(e.get("text", ""))
+            good = discriminative_terms(shared, doc_freq, total_docs,
+                                        exclude=scope_terms)
+            best = max(best, len(good))
+            if _names_the_document(e, qcodes) or len(good) >= MIN_CONTENT_OVERLAP:
+                passed.append(e)
+            else:
+                dropped += 1
 
-        if not exact_hit and not enough_overlap:
+        if not passed:
+            # A query with NO content terms ("the", "apa yang ada dalam ini?")
+            # lands here too: nothing to match on means nothing can be evidence.
             return Verdict("INSUFFICIENT", kept,
-                           [f"no verified exact-code match and only {best_overlap} "
-                            f"content term(s) shared with the query (need "
-                            f"{MIN_CONTENT_OVERLAP}) — the retrieved items are "
-                            "nearest neighbours, not evidence"], [])
+                           [f"no evidence met the relevance floor: best item "
+                            f"shared {best} discriminating term(s) with the "
+                            f"query (need {MIN_CONTENT_OVERLAP}) and none is a "
+                            f"document the query named"
+                            + ("" if df_is_meaningful(total_docs) else
+                               " [term weighting used the fallback boilerplate "
+                               "list — the index is too small for document "
+                               "frequency to mean anything]")], [])
+        if dropped:
+            flags.append(f"dropped {dropped} retrieved item(s) that did not meet "
+                         "the relevance floor (nearest neighbours, not evidence)")
+        kept = passed
 
     # ---- project isolation (§60)
     projects = {e.get("project") for e in kept if e.get("project")
@@ -157,17 +196,25 @@ def verify(evidence: list[dict], project_hint: str | None = None,
     # flags at all. On this corpus that is the common case, not the edge case
     # (43,897 of ~45,000 inventoried files are UNKNOWN).
     #
-    # Deliberate trade-off, stated so it can be overruled: unattributed
-    # evidence is DISCLOSED and caps the status at PARTIAL, rather than
-    # triggering the clarification question. Treating it as ambiguity would
-    # make almost every query on this corpus unanswerable, which would push
-    # the operator to disable the check — a guard nobody can live with is a
-    # guard that gets removed. Once project inference covers most of the
-    # corpus, revisit and consider promoting this to AMBIGUOUS_PROJECT.
+    # Deliberate trade-off, recorded as DECISIONS.md D-20 and ACCEPTED by the
+    # round-3 reviewer with conditions: unattributed evidence is DISCLOSED and
+    # caps the status at PARTIAL, rather than triggering the clarification
+    # question for every query. Treating it as ambiguity outright would make
+    # almost every query on this corpus unanswerable, which would push the
+    # operator to disable the check — a guard nobody can live with is a guard
+    # that gets removed.
+    #
+    # Reviewer condition 1: that leniency does NOT extend to the questions
+    # where an unattributable source is itself the harm. For a monetary
+    # amount, a date, a status or a clause obligation, mixing an unattributed
+    # document in with a named project is a §60 wrong-project answer, and no
+    # reader treats a footnote as disqualifying a figure. Those escalate.
     unattributed = [e for e in kept
                     if not e.get("project") or e.get("project") == "UNKNOWN"]
     if unattributed:
         names = sorted({e.get("filename", "?") for e in unattributed})
+        sensitive = bool(query and SENSITIVE_INTENT.search(query))
+        mixed = bool(projects) and not project_hint
         flags.append(
             f"{len(unattributed)} of {len(kept)} evidence item(s) have NO known "
             f"project and cannot be attributed: {', '.join(names[:5])}"
@@ -175,6 +222,12 @@ def verify(evidence: list[dict], project_hint: str | None = None,
             + (" — they may belong to a different project than the one asked "
                "about" if projects else
                " — nothing in this answer is attributable to a project"))
+        if sensitive and mixed and not cross_project:
+            flags.append(
+                "the question asks for a figure, date, status or obligation, "
+                "so unattributable evidence cannot simply be disclosed — "
+                "asking which project instead")
+            ambiguous = True
 
     # ---- revision currency (§62)
     superseded = [e for e in kept if e.get("superseded_by")]
@@ -216,8 +269,11 @@ def verify(evidence: list[dict], project_hint: str | None = None,
         grouped: dict[str, list] = {}
         for e in kept:
             p = e.get("project")
-            if p and p != "UNKNOWN":
-                grouped.setdefault(p, []).append(e)
+            # Unattributed items get their own group rather than being hidden:
+            # "which of these do you mean" is not answerable if the option that
+            # cannot be attributed is left off the list.
+            grouped.setdefault(p if p and p != "UNKNOWN" else "UNKNOWN",
+                               []).append(e)
         return Verdict("AMBIGUOUS_PROJECT", kept, flags, conflicts, grouped)
     status = "SUPPORTED"
     if (conflicts

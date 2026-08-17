@@ -427,3 +427,88 @@ deleted.
 LESSON: "I fixed it and the tests pass" and "the tests would have caught it"
 are different claims. Only the second one needs the revert, and only the second
 one was being made.
+
+
+**F-V3-26 / grounding / three doors past the "fixed" relevance floor** —
+SYMPTOM: the round-3 reviewer confirmed the round-1/2 attack query
+("warranty period for the pump") was finally refused, then walked through
+three doors it did not use. (a) `harvest_ids` treats `R01`, `D7`, `L2` as
+document codes, and a verified code match was a STANDALONE floor pass, so
+"what is the pump warranty period on Dawson drawing L-201?" was answered from
+a tender spec that merely cross-refers to L-201. (b) The floor was per-SET,
+not per-item: `best_overlap` was a max and the code check an `any(...)`, so one
+qualifying chunk admitted every other chunk into the citations with full §40
+provenance. (c) Two generic words cleared it — {locations, shown} and
+{contractor, shall, supply} are vocabulary every construction document shares.
+ROOT CAUSE: each is the same mistake at a smaller scale — treating a signal
+that CO-OCCURS with relevance as if it WERE relevance. FIX: (a) a code must
+look like a document identifier (`is_document_code`, excluding revision and
+2–3 character tokens) AND appear in the evidence's FILENAME — a body mention is
+a reference to a document, only the filename is its identity; (b) the floor
+now FILTERS per item and drops what fails, reporting how many; (c) shared terms
+are weighted by MEASURED document frequency from the index (`SparseIndex.
+doc_freq`), falling back to a boilerplate list only when the corpus is too
+small for a frequency to mean anything — and saying so in the flag when it
+does. The project name and bare revision tokens are excluded from overlap
+entirely: project scope is enforced by §60 isolation, and counting it as
+topical evidence counted it twice. RESULT: eleven tests in
+`test_reviewer_round3.py`; all six of the reviewer's attack queries return
+INSUFFICIENT end-to-end while six legitimate queries still answer.
+LESSON: the floor kept failing because every version measured "is this related
+to the query?" with whatever was cheapest to compute. A term that co-occurs
+with the answer is not the same as a term that identifies it, and the
+difference only shows up in the queries you did not think to try.
+
+**F-V3-27 / project isolation / consent to merge projects was a greedy regex**
+— SYMPTOM: `CROSS_PROJECT_INTENT` contained `\bcompare\b.*\bprojects?\b`
+and `\bany project\b`, so "compare the rain tree diameter with the turf spec
+in this project" and "does any project document mention a defects liability
+period?" both set `cross_project=True`. That single flag disables the
+AMBIGUOUS_PROJECT guard, so Dawson's RM50,569.30 and Meridian's RM99,111.22
+were merged into one evidence pack and labelled "as asked" — by a user who
+asked nothing of the kind. ROOT CAUSE: a permission was inferred from loose
+pattern matching. FIX: every pattern is now an anchored phrase a person can
+only write deliberately; when in doubt the system asks, and that path already
+exists. RESULT: `test_ordinary_questions_do_not_consent_to_cross_project_merging`
+(4 queries), `test_explicit_cross_project_phrases_still_consent` (4 queries).
+LESSON: consent inferred from a regex is not consent. A switch that disables a
+top-severity guard should be as hard to trip accidentally as it is easy to
+trip on purpose.
+
+**F-V3-28 / §84 / the volatile-pattern escape hatch could excuse the corpus** —
+SYMPTOM: with `volatile_patterns: ["*"]` the reviewer rewrote a source document
+and deleted another, and `verify_snapshot` returned `pass: True`. `*.pdf` did
+the same. ROOT CAUSE: the mechanism added in round 2 to stop live-service logs
+failing the gate had no breadth limit, so it could excuse exactly what the gate
+protects. FIX: declarations must be directory-anchored; bare `*` and bare
+document-extension globs are refused outright (`VolatilePatternRejected`). The
+verdict field now distinguishes `PASS` from `PASS_WITH_EXCUSES`, so a run
+carried by an allowlist is not machine-readable as a clean one.
+RESULT: `test_overbroad_volatile_patterns_are_refused` (6 patterns),
+`test_excused_run_is_distinguishable_from_a_clean_one`.
+LESSON: an escape hatch added to make a guard livable becomes the way around
+the guard unless its breadth is bounded at the point of declaration.
+
+**F-V3-29 / honesty / the audit cited an artifact it had not graded** —
+SYMPTOM: with a recent FAST report (recall 1.0) and an older FULLSWING report
+(recall 0.2), RETRIEVAL_QUALITY passed on the FAST numbers while naming the
+FULLSWING file as its evidence. A reviewer opening the cited artifact would
+find figures contradicting the verdict. ROOT CAUSE: introduced BY the round-2
+N7 fix — the report was selected by recency, the path by "last of
+fast/deep/fullswing present", and the two were never tied together. FIX: the
+path and the report travel as one pair. RESULT:
+`test_audit_cites_the_artifact_it_graded`.
+LESSON: a fix aimed at evidence integrity broke evidence integrity in a new
+way. Any change to how evidence is SELECTED needs a test that the verdict and
+the citation refer to the same object.
+
+**F-V3-30 / §60 / the project-label sync failed silently** —
+SYMPTOM: injecting an I/O error into the FTS `UPDATE` left the operator with a
+normal result dict (`sparse_rows_synced: 0`), no error and a zero exit — while
+the project-scoped sparse leg was dead and the F3(c) isolation leak was back.
+ROOT CAUSE: a bare `except Exception: return n` on an isolation-critical write.
+FIX: raises `SyncError` naming the failure and what to re-run. A partial sync
+is worse than a refused one, because the operator believes the labels are
+correct. RESULT: `test_project_label_sync_failure_is_loud`.
+LESSON: swallowing an exception converts a loud failure into a silent wrong
+answer. On an isolation boundary that trade is never worth making.

@@ -92,7 +92,8 @@ def audit(cfg: Config) -> dict:
         excused = len(safety.get("allowlisted_modified") or []) + \
             len(safety.get("allowlisted_deleted") or [])
         safety_detail += (
-            f" — {len(pats)} operator-declared volatile pattern(s) excusing "
+            f" — verdict {safety.get('verdict', 'PASS' if safety.get('pass') else 'FAIL')}, "
+            f"{len(pats)} operator-declared volatile pattern(s) excusing "
             f"{excused} change(s)" + (f": {pats[:5]}" if pats else ""))
         if not safety.get("hashed"):
             safety_detail += (" — WARNING: snapshot has no content hashes, so "
@@ -149,11 +150,15 @@ def audit(cfg: Config) -> dict:
     # from one of those measures the wrong thing (round-2 reviewer N7).
     mode_reports = [p for m in ("fast", "deep", "fullswing")
                     if (p := _latest(f"report_{m}*.json", bench_dir))]
+    # Keep the report and its PATH together. Round-3 reviewer R3-6: the report
+    # was chosen by recency while the cited path was "last of fast/deep/
+    # fullswing present", so the audit graded one artifact and cited another —
+    # a reviewer opening the evidence found numbers contradicting the verdict.
+    # This module exists to prevent exactly that.
     graded = sorted(
-        (r for p in mode_reports if (r := _load_json(p)) is not None),
-        key=lambda r: str(r.get("generated_at") or ""))
-    any_bench = graded[-1] if graded else None
-    any_bench_path = mode_reports[-1] if mode_reports else None
+        ((p, r) for p in mode_reports if (r := _load_json(p)) is not None),
+        key=lambda pr: str(pr[1].get("generated_at") or ""))
+    any_bench_path, any_bench = graded[-1] if graded else (None, None)
 
     def _enough(rep: dict | None) -> bool:
         """A ratio needs a sample. Round-2 reviewer N6: a one-question report

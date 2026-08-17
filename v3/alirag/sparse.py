@@ -26,6 +26,32 @@ ID_RE = re.compile(
 # tokens that look like codes but are noise
 ID_STOP = {"a4", "a3", "a1", "a0", "no1", "v1", "v2", "p1", "p2", "x2"}
 
+# Revision markers. They match ID_RE and are everywhere — nearly every drawing
+# sheet carries one — so treating them as document identifiers means "revision
+# R01" names tens of thousands of files at once (round-3 reviewer R3-2).
+REV_TOKEN_RE = re.compile(r"^R(?:EV)?[-_. ]?\d{1,2}[A-Z]?$", re.IGNORECASE)
+
+
+def is_document_code(tok: str) -> bool:
+    """Does this token plausibly IDENTIFY a document, rather than merely look
+    code-shaped?
+
+    `LAI-003`, `L-201`, `KP-980ASPEN-CS` identify. `R01`, `D7`, `L2` do not:
+    they are revision and detail markers shared across the whole corpus, and
+    admitting them let an off-corpus question ride into evidence on the back of
+    a revision number.
+    """
+    if REV_TOKEN_RE.match(tok):
+        return False
+    has_sep = any(c in tok for c in "-_/")
+    letters = sum(c.isalpha() for c in tok)
+    digits = sum(c.isdigit() for c in tok)
+    if has_sep:
+        # a separated code still has to carry enough on each side: "L-2" does not
+        return letters >= 1 and digits >= 2 and len(tok) >= 4
+    # unseparated: needs real length, e.g. "LAI003" but not "D7"/"L2"/"T12"
+    return letters >= 2 and digits >= 3
+
 
 def normalize_id(tok: str) -> str:
     return re.sub(r"[-_/.]", "", tok).upper()
@@ -72,6 +98,7 @@ class SparseIndex:
         # and our cross-thread use is read-only searches, so this is safe.
         self.con = sqlite3.connect(str(db_path), check_same_thread=False)
         self.con.executescript(SCHEMA)
+        self._df_cache: dict[str, int] = {}
 
     def close(self):
         self.con.close()
@@ -125,8 +152,34 @@ class SparseIndex:
             return '""'
         return " OR ".join(f'"{t}"' for t in content[:24])
 
-    def search(self, query: str, k: int = 20,
-               project: str | None = None) -> list[dict]:
+    def total_chunks(self) -> int:
+        return self.con.execute("SELECT COUNT(*) FROM fts").fetchone()[0]
+
+    def doc_freq(self, terms) -> dict:
+        """How many indexed chunks contain each term.
+
+        This is what makes the verifier's relevance floor MEASURED rather than
+        guessed: a term appearing in a quarter of the corpus discriminates
+        nothing, and only the corpus can say which terms those are. Cached per
+        connection because query terms repeat heavily.
+        """
+        out: dict[str, int] = {}
+        for t in terms:
+            if t in self._df_cache:
+                out[t] = self._df_cache[t]
+                continue
+            try:
+                n = self.con.execute(
+                    "SELECT COUNT(*) FROM fts WHERE fts MATCH ?",
+                    (f'"{t}"',)).fetchone()[0]
+            except sqlite3.OperationalError:
+                continue          # unparseable term: no statistic, not a zero
+            self._df_cache[t] = n
+            out[t] = n
+        return out
+
+    def search(self, query: str, k: int = 20, project: str | None = None,
+               trace=None) -> list[dict]:
         """BM25 search; optional exact project filter. Returns
         [{chunk_id, score, source:'sparse'}] best-first."""
         sql = ("SELECT chunk_id, bm25(fts) AS rank FROM fts WHERE fts MATCH ?")
@@ -138,7 +191,12 @@ class SparseIndex:
         args.append(k)
         try:
             rows = self.con.execute(sql, args).fetchall()
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as e:
+            # An unparseable FTS expression is a DEGRADED RUN, not an empty
+            # result. Returning [] silently made a dead lexical leg look
+            # identical to "no documents matched" (round-3 reviewer R3-9).
+            if trace is not None:
+                trace.set("sparse_error", str(e)[:200])
             return []
         # bm25() is lower-is-better; convert to a positive score
         return [{"chunk_id": int(cid), "score": -float(rank), "source": "sparse"}

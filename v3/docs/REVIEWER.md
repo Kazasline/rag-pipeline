@@ -47,7 +47,8 @@ retest result — in `docs/FAILURES.md`. Builder fixes, Reviewer re-runs.
 |---|---|---|---|---|
 | 2026-08-17 | round 1 (independent agent session) | **FAIL** | DATA_SAFETY, GROUNDING, TEST_COVERAGE | safety verification was unfalsifiable; relevance floor accepted any shared token; three §60 isolation leaks; benchmark gates bypassable |
 | 2026-08-17 | round 2 (independent agent session) | **FAIL** | RETRIEVAL_QUALITY, GROUNDING/CITATIONS, TEST_COVERAGE, DOCUMENTATION_HONESTY | relevance floor still bypassable via the sparse leg; UNKNOWN-project evidence merged silently; second-pass evidence unverified; benchmark artifacts selectable by filename; PROJECT_STATE claimed tests that did not exist |
-| _pending_ | round 3 | — | — | round-2 fixes in; awaiting re-audit. **No sign-off has been issued.** |
+| 2026-08-17 | round 3 (independent agent session) | **FAIL** | RETRIEVAL_QUALITY, GROUNDING/CITATIONS | 19 of 22 reverts confirmed red; §1 independently re-verified clean; DOCUMENTATION_HONESTY and ARCHITECTURE passed; DATA_SAFETY and TEST_COVERAGE passed with conditions. Failed on three new routes past the relevance floor, cross-project consent inferred from a greedy regex, an unbounded volatile-pattern allowlist, and an audit citing an artifact it had not graded. Ruled on and ACCEPTED the builder's D-20 deviation, with three conditions (all now implemented). |
+| _pending_ | round 4 | — | — | round-3 fixes in; awaiting re-audit. **No sign-off has been issued.** |
 
 Neither audit was run on the target machine — both were code-and-artifact
 audits in a separate agent session. The on-machine acceptance run (§84–§86

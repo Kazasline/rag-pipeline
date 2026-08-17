@@ -33,6 +33,16 @@ this change be accounted for?" and fails when it cannot.
 `guarded_open()` / `guarded_write_path()` remain the sanctioned write helpers
 and refuse source paths outright, but the safety verdict no longer depends on
 every writer remembering to use them.
+
+ONE HONEST LIMITATION, so nobody reads more into the report than it says
+(round-3 reviewer R3-11): `guarded_write_path()` is currently called from
+exactly one place in the package — snapshot() — so `written_paths()` never
+contains a real content path and `rag_modified` / `rag_deleted` are in practice
+always empty. A genuine breach by this system would therefore be reported under
+`unexplained_*`, not under `rag_*`. The VERDICT is unaffected (both fail
+`pass`), but the two-way attribution in the report is decorative today rather
+than load-bearing, and should not be cited as evidence that this system was
+shown not to be the writer.
 """
 
 from __future__ import annotations
@@ -69,6 +79,53 @@ def hash_path(path: str | os.PathLike, full_max: int = _FULL_HASH_MAX) -> str:
         return "p" + h.hexdigest()      # 'p' marks a partial digest
 
 
+class VolatilePatternRejected(ValueError):
+    """A declared volatile pattern was broad enough to excuse a real document."""
+
+
+# Extensions that carry the user's actual work. A volatile declaration that can
+# match one of these is not describing a live service — it is describing the
+# corpus, and it would let §84 pass while a tender was rewritten.
+_DOCUMENT_EXTS = (
+    ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".txt", ".md",
+    ".csv", ".rtf", ".odt", ".eml", ".msg", ".dwg", ".dxf", ".jpg", ".jpeg",
+    ".png", ".tif", ".tiff",
+)
+
+
+def _reject_overbroad_pattern(pat: str) -> None:
+    r"""Refuse declarations that would excuse changes to documents.
+
+    Round-3 reviewer R3-7: with `volatile_patterns: ["*"]` a source document
+    could be rewritten and another deleted and `verify_snapshot` still returned
+    `pass: True`. The escape hatch existed so a live service's own logs would
+    not fail the §84 gate; it must not be usable to excuse the corpus it was
+    built to protect.
+
+    A legitimate declaration is DIRECTORY-ANCHORED (`*/hermes/*`) — it names
+    where a service writes. A declaration that is bare, or that reaches
+    document extensions without naming a directory, is refused.
+    """
+    p = (pat or "").strip().replace("\\", "/")
+    if not p:
+        raise VolatilePatternRejected("empty volatile pattern")
+    bare = p.strip("*/ ")
+    if not bare:
+        raise VolatilePatternRejected(
+            f"volatile pattern {pat!r} matches everything. It would excuse any "
+            "change to any original file, which is the opposite of what §84 "
+            "verifies. Anchor it to the directory a service writes to, e.g. "
+            "'*/hermes/*'.")
+    has_dir_anchor = "/" in p.strip("*")
+    low = p.lower()
+    if not has_dir_anchor and any(low.endswith(e) or low.endswith("*" + e)
+                                  for e in _DOCUMENT_EXTS):
+        raise VolatilePatternRejected(
+            f"volatile pattern {pat!r} matches document files anywhere on the "
+            "drive. Changes to originals are exactly what §84 exists to catch. "
+            "Anchor it to a directory, e.g. '*/hermes/*.log'.")
+
+
 class SafetyGuard:
     def __init__(self, source_roots: list[str], workspace: str):
         self.source_roots = [Path(r).resolve() for r in source_roots if r]
@@ -101,6 +158,7 @@ class SafetyGuard:
         reviewer can see what was excused and by whom.
         """
         for pat in patterns:
+            _reject_overbroad_pattern(pat)
             if pat not in self.volatile_patterns:
                 self.volatile_patterns.append(pat)
                 self._audit("declare_volatile", pat, "operator declaration")
@@ -309,11 +367,18 @@ class SafetyGuard:
 
         passed = not (rag_mod or unexplained_mod or rag_del
                       or unexplained_del or moved)
+        # A pass earned by an allowlist is not a clean run, and the machine-
+        # readable verdict must say so rather than leaving it to a detail
+        # string nobody parses (round-3 reviewer R3-7).
+        excused = bool(allow_mod or allow_del)
+        verdict = ("PASS" if passed and not excused else
+                   "PASS_WITH_EXCUSES" if passed else "FAIL")
 
         return {
             "files_before": len(before),
             "files_after": len(seen),
             "pass": passed,
+            "verdict": verdict,          # PASS | PASS_WITH_EXCUSES | FAIL
             # RAG-attributable — a genuine breach by this system
             "rag_modified": rag_mod,
             "rag_deleted": rag_del,

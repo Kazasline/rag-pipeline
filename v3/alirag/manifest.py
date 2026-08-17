@@ -196,6 +196,18 @@ class Manifest:
             s[f"state_{st}"] = c
         s["duplicates_tagged"] = self.con.execute(
             "SELECT COUNT(*) FROM files WHERE duplicate_tag IS NOT NULL").fetchone()[0]
+        # Share of files whose project could not be inferred.
+        #
+        # The verifier DISCLOSES unattributed evidence rather than refusing it
+        # (D-20), which is only defensible while the operator can see how much
+        # of the corpus that covers. Round-3 reviewer, N3 condition 3: without
+        # this the guard weakens silently as the corpus grows.
+        unknown = self.con.execute(
+            "SELECT COUNT(*) FROM files WHERE project IS NULL OR project='UNKNOWN'"
+        ).fetchone()[0]
+        s["project_unknown"] = unknown
+        s["project_unknown_pct"] = (round(100.0 * unknown / s["files_total"], 1)
+                                    if s["files_total"] else 0.0)
         return s
 
     def commit(self):

@@ -195,13 +195,29 @@ def reinfer_metadata(cfg: Config, mf: Manifest) -> dict:
             "elapsed_s": round(time.time() - t0, 1)}
 
 
+class SyncError(RuntimeError):
+    """The sparse index could not be brought in line with the manifest."""
+
+
 def _sync_sparse_projects(cfg: Config, mf: Manifest) -> int:
-    """Push corrected project labels into the sparse index."""
+    """Push corrected project labels into the sparse index.
+
+    This RAISES on failure. Round-3 reviewer R3-8: it used to swallow every
+    exception and return a count, so an I/O error left the operator with a
+    normal-looking result dict (`sparse_rows_synced: 0`), no error and a zero
+    exit — while the project-scoped sparse leg was silently dead and the F3(c)
+    isolation leak was back. §60 isolation is not something that may fail
+    quietly; a partial sync is worse than a refused one, because the operator
+    believes the labels are correct.
+    """
     from .sparse import SparseIndex
     try:
         idx = SparseIndex(cfg.sparse_db)
-    except Exception:
-        return 0
+    except Exception as e:  # noqa: BLE001
+        raise SyncError(
+            f"cannot open the sparse index to sync project labels: {e}. "
+            "Project-scoped sparse retrieval would silently filter on stale "
+            "labels (§60).") from e
     n = 0
     try:
         for r in mf.con.execute(
@@ -211,8 +227,11 @@ def _sync_sparse_projects(cfg: Config, mf: Manifest) -> int:
                             (r[1], r[0]))
             n += 1
         idx.con.commit()
-    except Exception:
-        return n
+    except Exception as e:  # noqa: BLE001
+        raise SyncError(
+            f"project label sync failed after {n} row(s): {e}. The sparse "
+            "index is now inconsistent with the manifest — re-run "
+            "`alirag inventory --reinfer` once the cause is fixed.") from e
     finally:
         idx.close()
     return n

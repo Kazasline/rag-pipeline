@@ -38,6 +38,47 @@ STOPWORDS = {
     "jumlah", "senarai",
 }
 
+# Words that ARE topical in general English but carry no discriminating power
+# in THIS corpus, because construction and contract documents are built out of
+# them. Round-3 reviewer R3-4: with a flat count of 2 shared terms, "what
+# locations are shown for the security cameras?" was answered from rain-tree
+# chunks on the strength of {locations, shown}, and "which contractor shall
+# supply the pump?" came back SUPPORTED on {contractor, shall, supply}.
+#
+# This list is a FALLBACK. The real measure is document frequency taken from
+# the index (see `discriminative_terms`), which adapts to the corpus instead of
+# to my guesses about it. The list only applies when no index statistics are
+# available — unit tests, and the first query after a rebuild.
+DOMAIN_BOILERPLATE = {
+    "shall", "will", "must", "may", "required", "require", "requirement",
+    "requirements", "provide", "provided", "provision", "supply", "supplied",
+    "install", "installed", "installation", "document", "documents",
+    "drawing", "drawings", "project", "projects", "section", "clause",
+    "detail", "details", "works", "work", "specification", "specifications",
+    "spec", "specs", "refer", "reference", "note", "notes", "general",
+    "applicable", "location", "locations", "shown", "show", "item", "items",
+    "contractor", "consultant", "client", "employer", "sub-contractor",
+    "subcontractor", "site", "area", "areas", "type", "types", "system",
+    "systems", "date", "dated", "page", "sheet", "rev", "revision", "total",
+    "including", "include", "included", "accordance", "relevant", "respective",
+    "above", "below", "following", "hereby", "thereof", "said",
+    # Malay equivalents
+    "hendaklah", "perlu", "dibekalkan", "dipasang", "dokumen", "projek",
+    "lukisan", "kerja", "kerja-kerja", "spesifikasi", "rujuk", "rujukan",
+    "nota", "umum", "lokasi", "kawasan", "jenis", "tarikh", "muka", "surat",
+}
+
+# A term appearing in more than this share of indexed chunks tells you nothing
+# about which chunk you want.
+MAX_DF_RATIO = 0.25
+
+# ...but a SHARE needs a population. Over 10 chunks, a term in 3 of them reads
+# as "in 30% of the corpus" and gets discarded as boilerplate, when really the
+# corpus is too small to have boilerplate. Below this many indexed chunks the
+# measured ratio is noise and the fallback list is the more honest instrument —
+# the same reasoning that stops the benchmark reporting a p95 from n=3.
+MIN_DOCS_FOR_DF = 200
+
 _TOKEN_RE = re.compile(r"[A-Za-z0-9][\w\-]{2,}")
 
 
@@ -47,3 +88,45 @@ def content_terms(text: str) -> set:
     Codes like `LAI-003` survive because the pattern keeps internal hyphens.
     """
     return {t for t in _TOKEN_RE.findall(text.lower()) if t not in STOPWORDS}
+
+
+# Bare revision markers: R01, Rev A, R00. They appear in filenames and bodies
+# across the whole corpus, so sharing one with the query says only "both
+# mention a revision", never "this chunk answers the question".
+_REV_TERM_RE = re.compile(r"^r(?:ev)?[-_. ]?\d{1,2}[a-z]?$", re.IGNORECASE)
+
+
+def discriminative_terms(shared: set, doc_freq: dict | None = None,
+                         total_docs: int = 0, exclude: set | None = None) -> set:
+    """Of the terms shared between a query and a chunk, those that actually
+    narrow the corpus.
+
+    Preference order, most defensible first:
+      1. MEASURED — a term in more than MAX_DF_RATIO of indexed chunks is
+         dropped. This is derived from the corpus, so it adapts as the corpus
+         changes and does not depend on anyone's intuition about the domain.
+      2. FALLBACK — when no index statistics are available, drop the
+         hand-listed domain boilerplate above.
+
+    The fallback is strictly weaker and is labelled as such wherever its result
+    is reported, so a floor decision made without corpus statistics is never
+    presented as if it had them.
+
+    `exclude` carries SCOPE terms — the project name the query already targets.
+    Sharing the project name with a chunk is not evidence about the question:
+    project scope is enforced separately by §60 isolation, and counting it
+    twice let "In the Dawson project, what is the pump warranty on drawing
+    L-201?" clear the floor on {dawson, l-201} while saying nothing about
+    pumps (round-3 reviewer, follow-up to R3-2/R3-4).
+    """
+    out = {t for t in shared if not _REV_TERM_RE.match(t)}
+    if exclude:
+        out -= exclude
+    if doc_freq is not None and total_docs >= MIN_DOCS_FOR_DF:
+        return {t for t in out
+                if doc_freq.get(t, 0) / total_docs <= MAX_DF_RATIO}
+    return {t for t in out if t not in DOMAIN_BOILERPLATE}
+
+
+def df_is_meaningful(total_docs: int) -> bool:
+    return total_docs >= MIN_DOCS_FOR_DF

@@ -258,12 +258,15 @@ def test_fullswing_second_pass_evidence_is_verified(ingested):
     cfg, mf = ingested
     eng = Engine(cfg)
 
+    # Both chunks must be genuinely relevant to the query, or the relevance
+    # floor drops them and the project check never gets to run — the test would
+    # then pass for the wrong reason.
     dawson = mf.con.execute(
         "SELECT c.chunk_id FROM chunks c JOIN files f ON f.file_id=c.file_id "
-        "WHERE f.project='Dawson' LIMIT 1").fetchone()[0]
+        "WHERE f.project='Dawson' AND c.text LIKE '%claim amount%' LIMIT 1").fetchone()[0]
     meridian = mf.con.execute(
         "SELECT c.chunk_id FROM chunks c JOIN files f ON f.file_id=c.file_id "
-        "WHERE f.project='Meridian' LIMIT 1").fetchone()[0]
+        "WHERE f.project='Meridian' AND c.text LIKE '%claim amount%' LIMIT 1").fetchone()[0]
 
     real_retrieve = eng.retriever.retrieve
     calls = {"n": 0}
@@ -295,7 +298,11 @@ def test_fullswing_second_pass_evidence_is_verified(ingested):
         f"second-pass evidence never reached the citations: {projects}"
 
     # It did reach them -> the verifier must have seen the COMBINED set.
+    # Assert the ISOLATION check specifically. "project" appears in the
+    # unattributed-evidence flag too, so a loose substring match here could be
+    # satisfied by a different check entirely.
     assert resp["evidence_status"] == "AMBIGUOUS_PROJECT" or \
-        any("project" in f.lower() for f in resp["verifier_flags"]), \
-        (f"second-pass evidence from {projects} was cited without any project "
+        any("spans multiple projects" in f or "cross-project" in f
+            for f in resp["verifier_flags"]), \
+        (f"second-pass evidence from {projects} was cited without the §60 "
          f"check: status={resp['evidence_status']} flags={resp['verifier_flags']}")

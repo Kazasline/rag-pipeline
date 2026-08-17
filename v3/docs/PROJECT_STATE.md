@@ -6,20 +6,22 @@ fix pass that followed it._
 ## Where we are
 
 ```
-✅ PHASE 0-15   code built + 139 tests green
+✅ PHASE 0-15   code built + 179 tests green
 ✅ PHASE 0      EXECUTED on the target machine (2026-08-17)
 ✅ PHASE 1      EXECUTED — 20,000-file pilot inventory of E:\
 ✅ PHASE 5-15   installed; 313 files ingested, first grounded answers returned
 ⬜ PHASE 16     benchmark (needs a human-reviewed question set)
-🔄 PHASE 17-19  independent reviewer has run TWICE and FAILED both times
-                (round 1: 3 of 6 categories; round 2: 4 of 6). Round-2 fixes
-                are in. Round 3 pending — the reviewer, not the builder,
-                decides when this is done.
+🔄 PHASE 17-19  independent reviewer has run THREE times and FAILED each time
+                (round 1: 3 of 6 categories; round 2: 4 of 6; round 3: 2 of 6,
+                with 2 more conditional). Round-3 fixes are in. Round 4
+                pending — the reviewer, not the builder, decides.
 ⬜ PHASE 20     final docs with real numbers
 ```
 
-**Nothing here is signed off.** The builder cannot self-certify (§51). Two
-audits, two FAILs.
+**Nothing here is signed off.** The builder cannot self-certify (§51). Three
+audits, three FAILs — though round 3 was materially better than round 2: the
+round-2 findings held up under the reviewer's own revert matrix (19 of 22),
+§1 was independently re-verified clean, and DOCUMENTATION_HONESTY passed.
 
 Round 2 also caught this document lying. It previously read "every finding is
 now fixed with a test that fails before the fix" — the reviewer reverted each
