@@ -260,55 +260,46 @@ def test_audit_cites_the_artifact_it_graded(tmp_path: Path):
 
 
 # ------------------------------------------------------------------ R3-7
-@pytest.mark.parametrize("pat", ["*", "**", "*/", "*.pdf", "*.docx", "**.xlsx"])
-def test_overbroad_volatile_patterns_are_refused(pat):
-    """R3-7: with `volatile_patterns: ["*"]` a source document was rewritten
-    and another deleted, and verify_snapshot still returned pass:True. The
-    escape hatch must not be usable against the corpus it protects."""
-    guard = SafetyGuard(["/tmp/does-not-matter"], "/tmp/ws", excluded_dirs=("hermes", "sci_ai_library", "svc", "logs"))
-    with pytest.raises(VolatilePatternRejected):
+@pytest.mark.parametrize("pat", ["*", "**", "*/", "*.pdf", "*/hermes/*"])
+def test_the_volatile_allowlist_is_gone(pat):
+    """R3-7 bounded this escape hatch; N4-6 bounded it again; F5-4 found its
+    guard masked. Round 6 removed it: with the walk covering every file and
+    excluded-dir changes classified, a per-path allowlist could only ever
+    weaken §84. Every pattern is now refused, broad or narrow."""
+    guard = SafetyGuard(["/tmp/does-not-matter"], "/tmp/ws",
+                        excluded_dirs=("hermes", "sci_ai_library"))
+    with pytest.raises(VolatilePatternRejected) as e:
         guard.allow_volatile([pat])
+    assert "exclude_dirs" in str(e.value)
 
 
-def test_directory_anchored_patterns_are_still_accepted():
-    guard = SafetyGuard(["/tmp/does-not-matter"], "/tmp/ws", excluded_dirs=("hermes", "sci_ai_library", "svc", "logs"))
-    guard.allow_volatile(["*/hermes/*", "*/sci_ai_library/*", "*/logs/*.log"])
-    assert len(guard.volatile_patterns) == 3
-
-
-def test_excused_run_is_distinguishable_from_a_clean_one(tmp_path: Path):
+def test_excluded_run_is_distinguishable_from_a_clean_one(tmp_path: Path):
     """A pass earned by an allowlist is not a clean run, and the machine-
     readable verdict must say so — not only a detail string nobody parses.
 
-    The remaining live case for the allowlist, now that excluded directories
-    are skipped by the walk (F5-3): the operator adds an exclusion AFTER a
-    snapshot was taken, so files recorded then are absent from the re-scan and
-    would otherwise be reported as deletions.
+    A run carried by exclusions must be machine-readably different from one
+    where nothing moved at all.
     """
     src = tmp_path / "src"
     (src / "hermes").mkdir(parents=True)
     (src / "tender.txt").write_text("original", encoding="utf-8")
     (src / "hermes" / "beat.log").write_text("tick", encoding="utf-8")
 
-    before = SafetyGuard([str(src)], str(tmp_path / "ws"))      # no exclusions yet
-    snap = tmp_path / "ws" / "snap.jsonl"
-    before.snapshot(snap)
-
-    after = SafetyGuard([str(src)], str(tmp_path / "ws"),
+    guard = SafetyGuard([str(src)], str(tmp_path / "ws"),
                         excluded_dirs=("hermes",))
-    res = after.verify_snapshot(snap)
-    assert res["pass"] is False, "an unexplained disappearance must fail"
-    assert res["verdict"] == "FAIL"
+    snap = tmp_path / "ws" / "snap.jsonl"
+    guard.snapshot(snap)
+    assert guard.verify_snapshot(snap)["verdict"] == "PASS"
 
-    after.allow_volatile(["*/hermes/*"])
-    res = after.verify_snapshot(snap)
+    (src / "hermes" / "beat.log").write_text("tick tock", encoding="utf-8")
+    res = guard.verify_snapshot(snap)
     assert res["pass"] is True
-    assert res["verdict"] == "PASS_WITH_EXCUSES", res["verdict"]
-    assert any("beat.log" in p for p in res["allowlisted_deleted"])
+    assert res["verdict"] == "PASS_WITH_EXCLUSIONS", res["verdict"]
+    assert any("beat.log" in p for p in res["excluded_dir_modified"])
 
-    # ...and the allowlist still cannot cover a real document
+    # ...and an exclusion still cannot cover a real document
     (src / "tender.txt").write_text("edited by something else", encoding="utf-8")
-    res = after.verify_snapshot(snap)
+    res = guard.verify_snapshot(snap)
     assert res["pass"] is False and res["verdict"] == "FAIL"
     assert any("tender.txt" in p for p in res["unexplained_modified"])
 

@@ -88,13 +88,17 @@ def audit(cfg: Config) -> dict:
         # A pass earned by a broad allowlist is not the same as a clean run.
         # The excuse in force must be visible next to the verdict, or the
         # reviewer is signing off on a number without its caveat.
-        pats = safety.get("volatile_patterns") or []
-        excused = len(safety.get("allowlisted_modified") or []) + \
-            len(safety.get("allowlisted_deleted") or [])
+
+        excl = len(safety.get("excluded_dir_modified") or []) + \
+            len(safety.get("excluded_dir_deleted") or [])
+        # R6-1b: the walk covers everything, and what it found inside excluded
+        # directories must be visible HERE rather than only in the artifact —
+        # an absent number reads as a clean run.
         safety_detail += (
-            f" — verdict {safety.get('verdict', 'PASS' if safety.get('pass') else 'FAIL')}, "
-            f"{len(pats)} operator-declared volatile pattern(s) excusing "
-            f"{excused} change(s)" + (f": {pats[:5]}" if pats else ""))
+            f" — verdict {safety.get('verdict', 'PASS' if safety.get('pass') else 'FAIL')}"
+            f"; {safety.get('files_before', '?')} files snapshotted"
+            f"; {excl} change(s) inside excluded dirs "
+            f"{list(safety.get('excluded_dirs') or [])[:4]}")
         if not safety.get("hashed"):
             safety_detail += (" — WARNING: snapshot has no content hashes, so "
                               "same-size edits and renames are invisible")
@@ -104,8 +108,13 @@ def audit(cfg: Config) -> dict:
     # allowlist. §84 acceptance requires a CLEAN run.
     item("DATA_SAFETY", _latest("safety_verify*.json", reports),
          None if safety is None else (
-             safety.get("verdict", "PASS" if safety.get("pass") else "FAIL") == "PASS"
-             and bool(safety.get("hashed"))),
+             safety.get("verdict", "PASS" if safety.get("pass") else "FAIL")
+             in ("PASS", "PASS_WITH_EXCLUSIONS")
+             and bool(safety.get("hashed"))
+             # an exclusion overlapping the corpus is a config error, not a
+             # live service, and must never certify
+             and not (safety.get("excluded_dir_documents_modified")
+                      or safety.get("excluded_dir_documents_deleted"))),
          safety_detail)
 
     # per-mode benchmarks (§80–§82)

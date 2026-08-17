@@ -81,14 +81,15 @@ def test_verify_attributes_external_writers(tmp_path):
 
     # Once the operator declares the service volatile, it is excused — and the
     # excuse is itself recorded for review.
-    # Excluding the directory both stops the walk seeing it (so the change
-    # cannot recur) and, for the entries already in this older snapshot, routes
-    # them through the declared allowlist rather than reporting a deletion.
+    # Declaring the DIRECTORY non-knowledge classifies the change rather than
+    # excusing it: still walked, still reported, still counted — just no longer
+    # unexplained. Exclusion changes the LABEL, never whether we look (R6-1).
     guard.excluded_dirs = ("hermes", "sci_ai_library", "svc")
-    guard.allow_volatile(["*/svc/*"])
     declared = guard.verify_snapshot(snap)
     assert declared["pass"] is True
-    assert str(heartbeat) in declared["allowlisted_deleted"]
+    assert declared["verdict"] == "PASS_WITH_EXCLUSIONS"
+    assert str(heartbeat) in declared["excluded_dir_modified"]
+    assert str(heartbeat) in declared["modified"], "it must still be SEEN"
     assert declared["rag_modified"] == [] and declared["rag_deleted"] == []
 
 

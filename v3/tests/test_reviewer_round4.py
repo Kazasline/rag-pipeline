@@ -168,11 +168,14 @@ def test_volatile_patterns_naming_the_corpus_are_refused(pat):
         guard.allow_volatile([pat])
 
 
-def test_volatile_patterns_inside_excluded_dirs_are_accepted():
+def test_excluded_dirs_are_the_only_declaration_mechanism():
+    """N4-6 bounded the per-path allowlist; round 6 removed it. The directory
+    declaration in config is now the single mechanism, and it is visible."""
     guard = SafetyGuard(["/tmp/x"], "/tmp/ws",
                         excluded_dirs=("hermes", "sci_ai_library"))
-    guard.allow_volatile(["*/hermes/*", "*/sci_ai_library/logs/*.log"])
-    assert len(guard.volatile_patterns) == 2
+    assert guard.excluded_dirs == ("hermes", "sci_ai_library")
+    with pytest.raises(VolatilePatternRejected):
+        guard.allow_volatile(["*/hermes/*"])
 
 
 def test_audit_refuses_to_certify_an_excused_safety_run(tmp_path: Path):

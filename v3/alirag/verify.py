@@ -35,6 +35,16 @@ DATE_RE = re.compile(
     r"|\d{4}-\d{2}-\d{2})\b", re.IGNORECASE)
 
 
+# A number carrying a UNIT is an answer; a bare number is usually furniture.
+# "24 months", "150mm", "12 nos", "5%" qualify. "SHEET 3 OF 40" and
+# "SCALE 1:200" — the contents of a drawing title block — do not, which is the
+# distinction R6-2 turns on.
+QUANTITY_RE = re.compile(
+    r"\b\d+(?:[.,]\d+)?\s*(?:months?|weeks?|days?|years?|hours?|"
+    r"mm|cm|m2|m³|m3|sqm|sq\.?m|km|kg|tonnes?|nos?\b|units?|pcs?|%|"
+    r"bulan|minggu|hari|tahun|unit|biji)\b", re.IGNORECASE)
+
+
 def _sensitive_evidence(items: list) -> bool:
     """Does the EVIDENCE itself carry the kind of fact that must be attributable?
 
@@ -52,7 +62,8 @@ def _sensitive_evidence(items: list) -> bool:
     """
     for e in items:
         text = e.get("text", "") or ""
-        if MONEY_RE.search(text) or DATE_RE.search(text):
+        if (MONEY_RE.search(text) or DATE_RE.search(text)
+                or QUANTITY_RE.search(text)):
             return True
     return False
 
@@ -67,6 +78,20 @@ SENSITIVE_INTENT = re.compile(
     r"days|delay|delayed|late|when|deadline|finish|finished|agreed|"
     r"jumlah|harga|kos|nilai|tuntutan|bayaran|tarikh|tempoh|status|"
     r"berapa|bayar|caj|hutang|lewat|bila)\b",
+    re.IGNORECASE)
+
+# Questions whose answer must be a NUMBER OR A DATE. Narrower than
+# SENSITIVE_INTENT on purpose: "what is the approval status?" is sensitive —
+# an unattributable source is still a §60 problem for it — but its answer is a
+# word ("rejected"), so demanding a figure in the evidence would refuse a
+# correct answer. Only these require the answer's shape to be present.
+QUANTITATIVE_INTENT = re.compile(
+    r"\b(amount|amounts|sum|total|cost|price|rate|rates|value|quantum|"
+    r"payment|invoice|claim|claims|fee|fees|charge|charged|billed|paid|"
+    r"payable|owed|owing|balance|shortfall|unpaid|quantity|quantities|"
+    r"how much|how many|how long|when|date|dated|deadline|due|duration|"
+    r"period|completion|handover|extension|eot\b|days|weeks|months|"
+    r"berapa|jumlah|harga|kos|nilai|bayaran|tarikh|tempoh|bila)\b",
     re.IGNORECASE)
 
 # Distinct content terms a chunk must share with the query before dense-only
@@ -91,9 +116,20 @@ _content_terms = content_terms   # retained: referenced by existing tests
 
 
 def _query_doc_codes(query: str) -> set:
-    """Normalized codes in the query that could IDENTIFY a document."""
-    return {normalize_id(c) for c in harvest_ids(query, limit=8)
-            if is_document_code(c)}
+    """Normalized codes in the query that could IDENTIFY a document.
+
+    Expanded through `code_variants` as well (round-6 reviewer R6-3b): F5-2
+    fixed only the index side, so pasting a full sheet number from an email —
+    "…on DWG-L-201-R03?" — failed to match the short `L-201.pdf` on disk, while
+    the reverse direction worked. The §9 exact path has to work whichever form
+    the user happens to have.
+    """
+    out = {normalize_id(c) for c in harvest_ids(query, limit=8)
+           if is_document_code(c)}
+    for c in harvest_ids(query, limit=8):
+        if is_document_code(c):
+            out |= code_variants(c, limit=8)
+    return out
 
 
 def _names_the_document(evidence: dict, qcodes: set) -> bool:
@@ -347,6 +383,28 @@ def verify(evidence: list[dict], project_hint: str | None = None,
         listing = "; ".join(f"RM{a} ({', '.join(sorted(fs)[:2])})"
                             for a, fs in sorted(amounts.items())[:6])
         conflicts.append(f"multiple monetary amounts in evidence: {listing}")
+
+    # ---- the answer's SHAPE must be present in the evidence (§39)
+    #
+    # Round-6 reviewer R6-2. A drawing title block — "SKYPARK TOWERS — PODIUM
+    # LANDSCAPE GA — SHEET 3 OF 40" — was returned SUPPORTED, with no flags,
+    # for "what is the final claim amount for the Skypark Towers podium?".
+    # The F5-1 fix subtracted terms belonging to MANIFEST PROJECT LABELS, and
+    # a title block is full of words that are not project labels (the
+    # development name, the drawing title, the client, the consultant), so two
+    # of them cleared the floor.
+    #
+    # The machinery to close this already existed and was wired only to the
+    # unattributed-evidence path: if the question asks for a figure, a date or
+    # a status, then evidence containing none of those cannot support an
+    # answer — whoever the project belongs to. This is the same "key on the
+    # material" move as F5-5, applied to the other half.
+    if query and QUANTITATIVE_INTENT.search(query) and not _sensitive_evidence(kept):
+        flags.append(
+            "the question asks for a figure or a date, but no retrieved "
+            "passage contains one — the evidence identifies documents rather "
+            "than answering the question")
+        return Verdict("INSUFFICIENT", kept, flags, conflicts)
 
     # ---- sufficiency
     if len(kept) < min_evidence:

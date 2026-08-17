@@ -207,16 +207,21 @@ def main(argv: list[str] | None = None):
     if args.cmd == "safety":
         guard = SafetyGuard(cfg.source_roots, cfg.workspace,
                             excluded_dirs=cfg.ingest.exclude_dirs)
-        # Operator-declared volatile patterns, from config.yaml. Applied to
-        # BOTH snapshot and verify so the declaration in force is recorded on
-        # the artifact itself and the reviewer can rule on the excuse.
+        # volatile_patterns is removed (round-6 R6-1). If a config still sets
+        # it, say so rather than silently ignoring a line the operator believes
+        # is protecting them.
         if cfg.volatile_patterns:
-            guard.allow_volatile(list(cfg.volatile_patterns))
+            print("[safety] WARNING: volatile_patterns is no longer honoured "
+                  "and was ignored: " + ", ".join(map(str, cfg.volatile_patterns))
+                  + "\n          Declare these directories in "
+                  "ingest.exclude_dirs instead; their changes are then reported "
+                  "under excluded_dir_* without failing the §84 verdict.",
+                  flush=True)
         snap = cfg.dir("reports") / "safety_snapshot.jsonl"
         if args.action == "snapshot":
             n = guard.snapshot(snap)
             _print({"snapshot": str(snap), "files": n,
-                    "volatile_patterns": list(guard.volatile_patterns)})
+                    "excluded_dirs": list(guard.excluded_dirs)})
         else:
             result = guard.verify_snapshot(snap)
             out = cfg.dir("reports") / f"safety_verify_{int(time.time())}.json"

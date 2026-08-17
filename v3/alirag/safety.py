@@ -149,9 +149,9 @@ class SafetyGuard:
         # _reject_overbroad_pattern).
         self.excluded_dirs = tuple(excluded_dirs)
         self._audit_path: Path | None = None
-        # Path patterns the operator has explicitly declared volatile (live
-        # services writing their own logs/locks). Empty by default: a change
-        # is only excused when someone declared it in advance.
+        # No per-path allowlist exists any more (see allow_volatile). Kept as
+        # an always-empty attribute so older callers reading it see the truth
+        # rather than an AttributeError.
         self.volatile_patterns: list[str] = []
 
     # ------------------------------------------------------------ helpers
@@ -169,17 +169,28 @@ class SafetyGuard:
         return any(self._under(Path(path), r) for r in self.source_roots)
 
     def allow_volatile(self, patterns: list[str]) -> None:
-        """Declare path patterns whose changes are expected (fnmatch syntax).
+        """REMOVED. Use `ingest.exclude_dirs` instead.
 
-        Use for live services that rewrite their own state — never for
-        directories containing documents. Declarations are journaled so the
-        reviewer can see what was excused and by whom.
+        The per-path allowlist was introduced in round 2 so a live service's
+        own logs would not fail §84, and the independent reviewer then broke it
+        three times: it accepted `*` (N4-6), then `*/Dawson/*` naming the corpus
+        (N4-6 again), then its own guard turned out to be masked by a later
+        branch (F5-4). Every fix bounded the examples and left the class open.
+
+        It is now redundant as well as dangerous. The walk covers every file,
+        and changes inside a directory the operator excluded from indexing are
+        classified as `excluded_dir_*` — reported and counted, not failing
+        `pass`. That is one declaration, made in config where it is visible,
+        doing the job this method did by per-path exception.
+
+        A mechanism whose only remaining purpose is to weaken a guarantee is
+        better deleted than bounded.
         """
-        for pat in patterns:
-            _reject_overbroad_pattern(pat, self.excluded_dirs)
-            if pat not in self.volatile_patterns:
-                self.volatile_patterns.append(pat)
-                self._audit("declare_volatile", pat, "operator declaration")
+        raise VolatilePatternRejected(
+            "volatile_patterns is removed. Declare the directory in "
+            "ingest.exclude_dirs instead: changes inside it are then reported "
+            "under excluded_dir_* without failing §84, and the declaration is "
+            f"visible in config. Rejected: {list(patterns)[:4]}")
 
     def _is_volatile(self, path: str) -> bool:
         norm = path.replace("\\", "/")
@@ -277,24 +288,26 @@ class SafetyGuard:
                 if self._under(dp, self.workspace):
                     dirnames[:] = []
                     continue
-                # Skip directories excluded from indexing.
+                # The walk covers EVERY file under the source roots.
                 #
-                # Round-5 reviewer F5-3: the walk covered the operator's live
-                # services, so the shipped config — which declares
-                # */hermes/* and */sci_ai_library/* volatile precisely because
-                # they rewrite state continuously — could only ever produce
-                # PASS_WITH_EXCUSES, which the audit then refused. The gate was
-                # unsatisfiable, and an unsatisfiable gate is one the operator
-                # learns to ignore. Excluding them here means their heartbeats
-                # never enter the diff at all, so a genuinely clean PASS is
-                # reachable with no excuse in force.
+                # Round-6 reviewer R6-1: an earlier version skipped
+                # `exclude_dirs` here, and that was a regression in the
+                # headline guarantee. Excluded directories were not excused —
+                # they were never examined — so §84 reported `pass: True`
+                # while a source document inside one was modified, deleted and
+                # renamed. The shipped exclusion list contains generic names
+                # (`models`, `build`, `dist`, `checkpoints`) that plausibly
+                # match real document folders, and `_is_excluded_dir` matches
+                # ANY path component, so no operator mistake was required.
                 #
-                # This does not weaken §84: these directories hold no documents
-                # (that is what excluding them from indexing asserts), and the
-                # assertion is visible in config rather than buried here.
-                if self._is_excluded_dir(dp):
-                    dirnames[:] = []
-                    continue
+                # The reasoning in the removed comment was a non-sequitur:
+                # exclusion from indexing asserts "not worth indexing", while
+                # §1 protects the user's FILES. Those two sets were identical
+                # before that change and were not after it.
+                #
+                # Changes inside excluded directories are now CLASSIFIED
+                # (below) rather than omitted: reported, counted, and not
+                # failing `pass` — visible instead of absent.
                 for fn in filenames:
                     yield dp / fn
 
@@ -393,27 +406,40 @@ class SafetyGuard:
         ours = self.written_paths()
 
         def classify(paths):
-            rag, allow, unexplained = [], [], []
+            rag, excluded, unexplained = [], [], []
             for p in paths:
                 if p in ours:
                     rag.append(p)
-                elif self._is_volatile(p):
-                    allow.append(p)
+                elif self._is_excluded_dir(Path(p)):
+                    excluded.append(p)
                 else:
                     unexplained.append(p)
-            return rag, allow, unexplained
+            return rag, excluded, unexplained
 
-        rag_mod, allow_mod, unexplained_mod = classify(modified)
-        rag_del, allow_del, unexplained_del = classify(still_deleted)
+        rag_mod, excl_mod, unexplained_mod = classify(modified)
+        rag_del, excl_del, unexplained_del = classify(still_deleted)
+
+        # An excluded directory holding DOCUMENTS is a configuration error, not
+        # a live service: the exclusion list and the corpus overlap, and the
+        # operator is losing both indexing and safety coverage without being
+        # told. These fail (round-6 reviewer, condition 2).
+        def _documents(paths):
+            return [p for p in paths
+                    if Path(p).suffix.lower() in _DOCUMENT_EXTS]
+
+        excl_doc_mod = _documents(excl_mod)
+        excl_doc_del = _documents(excl_del)
 
         passed = not (rag_mod or unexplained_mod or rag_del
-                      or unexplained_del or moved)
+                      or unexplained_del or moved
+                      or excl_doc_mod or excl_doc_del)
         # A pass earned by an allowlist is not a clean run, and the machine-
         # readable verdict must say so rather than leaving it to a detail
         # string nobody parses (round-3 reviewer R3-7).
-        excused = bool(allow_mod or allow_del)
-        verdict = ("PASS" if passed and not excused else
-                   "PASS_WITH_EXCUSES" if passed else "FAIL")
+        excluded_changed = bool(excl_mod or excl_del)
+        verdict = ("FAIL" if not passed else
+                   "PASS_WITH_EXCLUSIONS" if excluded_changed else
+                   "PASS")
 
         return {
             "files_before": len(before),
@@ -427,20 +453,28 @@ class SafetyGuard:
             "unexplained_modified": unexplained_mod,
             "unexplained_deleted": unexplained_del,
             # excused only because the operator declared the pattern volatile
-            "allowlisted_modified": allow_mod,
-            "allowlisted_deleted": allow_del,
+            # changed inside a directory the operator excluded from indexing:
+            # not a breach, but NEVER silently absent from the report (R6-1)
+            "excluded_dir_modified": excl_mod,
+            "excluded_dir_deleted": excl_del,
+            # ...unless they are documents, which means the exclusion list and
+            # the corpus overlap — a configuration error that fails
+            "excluded_dir_documents_modified": excl_doc_mod,
+            "excluded_dir_documents_deleted": excl_doc_del,
+            "excluded_dirs": list(self.excluded_dirs),
             "moved": moved,
             # raw diffs
             "modified": modified,
             "deleted": still_deleted,
             "added_count": len(added) - len(moved),
-            "volatile_patterns": list(self.volatile_patterns),
             "hashed": any(r.get("h") for r in before.values()),
-            "note": ("'pass' fails on ANY change to a source file that this "
-                     "system caused or that nothing accounts for. Changes are "
-                     "excused only when they match a pattern the operator "
-                     "declared volatile in advance (volatile_patterns); those "
-                     "are listed under allowlisted_* so the excuse can be "
-                     "reviewed. Renames are reconciled by content hash and "
+            "note": ("EVERY file under the source roots is walked; nothing is "
+                     "skipped. 'pass' fails on any change to a source file that this "
+                     "system caused or that nothing accounts for. "
+                     "Changes inside directories excluded from "
+                     "indexing are listed under excluded_dir_* and do not fail "
+                     "'pass' — but a DOCUMENT changing inside one does fail, "
+                     "because that means the exclusion list overlaps the "
+                     "corpus. Renames are reconciled by content hash and "
                      "reported under 'moved'."),
         }

@@ -176,7 +176,6 @@ def test_volatile_patterns_are_reachable_from_config_and_reported(tmp_path: Path
 
     cfg = Config(workspace=str(tmp_path / "ALI_RAG"), source_roots=[str(src)],
                  embed=EmbedConfig(provider="hash", dim=256))
-    cfg.volatile_patterns = ["*/hermes/*"]
     # a volatile declaration may only point inside a directory the
     # operator already excluded from indexing (round-4 N4-6)
     cfg.ingest.exclude_dirs = tuple(cfg.ingest.exclude_dirs) + ("hermes",)
@@ -190,16 +189,15 @@ def test_volatile_patterns_are_reachable_from_config_and_reported(tmp_path: Path
     rep = json.loads(sorted(cfg.dir("reports").glob("safety_verify_*.json"))[-1]
                      .read_text(encoding="utf-8"))
     assert rep["pass"] is True, (rep["unexplained_modified"], rep["volatile_patterns"])
-    assert rep["volatile_patterns"] == ["*/hermes/*"], \
-        "the declaration in force must be recorded on the artifact"
-    # Round-5 F5-3: the live-service directory is excluded from indexing, so
-    # the walk skips it and the heartbeat never enters the diff. The verdict is
-    # a genuinely CLEAN pass — which is what makes the audit gate satisfiable.
-    assert rep["verdict"] == "PASS", rep["verdict"]
-    assert not rep["allowlisted_modified"] and not rep["modified"]
+    assert rep["excluded_dirs"], "the declaration in force must be on the artifact"
+    # Round-6 R6-1: the walk covers the excluded directory too. Its change is
+    # CLASSIFIED, not omitted — reported and counted, without failing §84.
+    assert rep["verdict"] == "PASS_WITH_EXCLUSIONS", rep["verdict"]
+    assert any("beat.log" in p for p in rep["excluded_dir_modified"])
+    assert any("beat.log" in p for p in rep["modified"]), "it must still be SEEN"
 
 
-def test_a_document_change_is_never_excused_by_a_volatile_pattern(tmp_path: Path):
+def test_a_document_change_is_never_excused_by_an_exclusion(tmp_path: Path):
     """The escape hatch must not become a way to pass §84 while a real
     document is edited."""
     from alirag.safety import SafetyGuard
@@ -209,7 +207,6 @@ def test_a_document_change_is_never_excused_by_a_volatile_pattern(tmp_path: Path
     doc.write_text("original", encoding="utf-8")
     guard = SafetyGuard([str(src)], str(tmp_path / "ws"),
                         excluded_dirs=("hermes",))
-    guard.allow_volatile(["*/hermes/*"])
     snap = tmp_path / "ws" / "snap.jsonl"
     guard.snapshot(snap)
     doc.write_text("edited by something else", encoding="utf-8")
@@ -230,17 +227,19 @@ def test_audit_fails_data_safety_when_the_snapshot_has_no_hashes(tmp_path: Path)
     assert "no content hashes" in rep["items"]["DATA_SAFETY"]["detail"]
 
 
-def test_audit_surfaces_the_allowlist_next_to_the_verdict(tmp_path: Path):
-    """A pass earned by a broad allowlist is not a clean run, and the reviewer
-    must see the excuse without opening the artifact."""
+def test_audit_surfaces_excluded_dir_changes_next_to_the_verdict(tmp_path: Path):
+    """A pass carried by exclusions is not a clean run, and the reviewer must
+    see that without opening the artifact — an absent number reads as clean."""
     cfg = _cfg(tmp_path)
     (cfg.dir("reports") / "safety_verify_1.json").write_text(json.dumps({
-        "pass": True, "hashed": True, "volatile_patterns": ["*/hermes/*", "*.log"],
-        "allowlisted_modified": ["E:/x/hermes/beat.log"],
-        "allowlisted_deleted": []}), encoding="utf-8")
+        "pass": True, "hashed": True, "verdict": "PASS_WITH_EXCLUSIONS",
+        "files_before": 12, "excluded_dirs": ["hermes", "sci_ai_library"],
+        "excluded_dir_modified": ["E:/x/hermes/beat.log"],
+        "excluded_dir_deleted": []}), encoding="utf-8")
     detail = reviewer.audit(cfg)["items"]["DATA_SAFETY"]["detail"]
-    assert "2 operator-declared volatile pattern(s)" in detail
-    assert "1 change(s)" in detail
+    assert "PASS_WITH_EXCLUSIONS" in detail
+    assert "1 change(s) inside excluded dirs" in detail
+    assert "hermes" in detail
 
 
 # ---------------------------------------------------------------- N11

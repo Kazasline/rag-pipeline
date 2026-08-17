@@ -9,6 +9,14 @@ independent reviewer found that untrue. The round-5 reviewer asked for the
 matrix as an artifact it could re-run rather than re-derive. This is that
 artifact.
 
+RULE: ONE MUTATION, ONE MECHANISM.
+A mutation that disables more than one thing at a time is not evidence about
+any of them. The round-6 reviewer found this concretely: the F5-5 mutation
+rewrote `sensitive = _sensitive_evidence(kept) or bool(` to `False and bool(`,
+killing the query regex AND the money check AND the date check together. It
+reported RED for the money half while the date half had no test at all. Any
+mutation that cannot be traced to a single mechanism must be split.
+
 Each MUTATION below disables exactly one fix by rewriting one fragment of
 source. The script applies it to a scratch copy of the repo, runs the full test
 suite there, and records whether the suite went red. A mutation that leaves the
@@ -122,10 +130,75 @@ MUTATIONS: list[tuple[str, str, str, str, str]] = [
      "alirag/verify.py",
      "        if mixed and not cross_project and (sensitive or projects):",
      "        if False:"),
-    ("F5-5", "escalation keys on query wording, not on the evidence",
+    # F5-5 split into one mutation per mechanism (round-6 reviewer).
+    ("F5-5a", "escalation ignores monetary evidence",
      "alirag/verify.py",
-     "        sensitive = _sensitive_evidence(kept) or bool(",
-     "        sensitive = False and bool("),
+     "        if (MONEY_RE.search(text) or DATE_RE.search(text)",
+     "        if (False or DATE_RE.search(text)"),
+    ("F5-5b", "escalation ignores dates in evidence",
+     "alirag/verify.py",
+     "        if (MONEY_RE.search(text) or DATE_RE.search(text)\n"
+     "                or QUANTITY_RE.search(text)):",
+     "        if (MONEY_RE.search(text) or False\n"
+     "                or QUANTITY_RE.search(text)):"),
+    ("F5-5c", "escalation ignores quantities in evidence",
+     "alirag/verify.py",
+     "                or QUANTITY_RE.search(text)):",
+     "                or False):"),
+    ("F5-5d", "the query-side sensitive-intent trigger is dead",
+     "alirag/verify.py",
+     "        sensitive = _sensitive_evidence(kept) or bool(\n"
+     "            query and SENSITIVE_INTENT.search(query))",
+     "        sensitive = _sensitive_evidence(kept)"),
+
+    # ---------------------------------------------------- round-6 findings
+    ("R6-1", "safety walk skips excluded dirs instead of classifying them",
+     "alirag/safety.py",
+     "                elif self._is_excluded_dir(Path(p)):",
+     "                elif False:"),
+    ("R6-1b", "an excluded dir holding DOCUMENTS does not fail",
+     "alirag/safety.py",
+     "                      or excl_doc_mod or excl_doc_del)", ")"),
+    ("R6-2", "a figure/date question is answerable from evidence with neither",
+     "alirag/verify.py",
+     "    if query and QUANTITATIVE_INTENT.search(query) and not _sensitive_evidence(kept):",
+     "    if False:"),
+    ("R6-2b", "the shape check widens to non-quantitative questions",
+     "alirag/verify.py",
+     "    if query and QUANTITATIVE_INTENT.search(query) and not _sensitive_evidence(kept):",
+     "    if query and SENSITIVE_INTENT.search(query) and not _sensitive_evidence(kept):"),
+    ("R6-3", "bare numbers indexed as document identifiers",
+     "alirag/sparse.py",
+     "                if not (any(c.isalpha() for c in window)\n"
+     "                        and any(c.isdigit() for c in window)):\n"
+     "                    continue\n", ""),
+    ("R6-3b", "query-side codes not expanded to variants",
+     "alirag/verify.py",
+     "    for c in harvest_ids(query, limit=8):\n"
+     "        if is_document_code(c):\n"
+     "            out |= code_variants(c, limit=8)\n", ""),
+
+    # ------------------------------------- mutations contributed by the reviewer
+    ("RV-6", "MAX_CODE_VARIANTS raised to infinity",
+     "alirag/sparse.py", "MAX_CODE_VARIANTS = 400", "MAX_CODE_VARIANTS = 10**9"),
+    ("RV-8", "second-pass re-verify loses known_projects",
+     "alirag/answer.py",
+     "                                 doc_freq=df, total_docs=ndocs,\n"
+     "                                 known_projects=self._projects_cache)",
+     "                                 doc_freq=df, total_docs=ndocs)"),
+    ("RV-9", "excluded-dir match becomes leaf-only",
+     "alirag/safety.py",
+     "        return any(part.lower() in low for part in path.parts)",
+     "        return path.name.lower() in low"),
+    ("RV-10", "dense leg loses pre-fusion project scoping",
+     "alirag/retrieve.py",
+     "                r = self.dense.search(qvec, k=policy.dense_k,\n"
+     "                                      allowed_chunks=allowed)",
+     "                r = self.dense.search(qvec, k=policy.dense_k)"),
+    ("RV-13", "exact leg stops preferring filename hits over body mentions",
+     "alirag/sparse.py",
+     "                hits[cid] = max(hits.get(cid, 0.0), 2.0 if in_fn else 1.0)",
+     "                hits[cid] = max(hits.get(cid, 0.0), 1.0)"),
     ("R3-1", "cross-project consent inferred from ordinary questions",
      "alirag/router.py",
      "    r\"\\bcompare (all|the|these|both|multiple) projects\\b\",",

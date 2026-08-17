@@ -134,7 +134,6 @@ def test_shipped_config_can_produce_a_clean_safety_pass(tmp_path: Path):
     cfg = Config(workspace=str(tmp_path / "ALI_RAG"), source_roots=[str(src)],
                  embed=EmbedConfig(provider="hash", dim=256))
     cfg.ingest.exclude_dirs = tuple(cfg.ingest.exclude_dirs) + ("hermes",)
-    cfg.volatile_patterns = ["*/hermes/*"]
     cfg_path = cfg.dir("config") / "config.yaml"
     cfg.save(cfg_path)
 
@@ -144,7 +143,11 @@ def test_shipped_config_can_produce_a_clean_safety_pass(tmp_path: Path):
 
     rep = json.loads(sorted(cfg.dir("reports").glob("safety_verify_*.json"))[-1]
                      .read_text(encoding="utf-8"))
-    assert rep["verdict"] == "PASS", rep
+    # Round-6 R6-1: the heartbeat is SEEN and classified, not skipped. The
+    # verdict is earnable and the audit accepts it — while the change remains
+    # visible in the artifact and in the audit detail.
+    assert rep["verdict"] == "PASS_WITH_EXCLUSIONS", rep
+    assert any("beat.log" in p for p in rep["excluded_dir_modified"])
     assert reviewer.audit(cfg)["items"]["DATA_SAFETY"]["status"] == "PASS"
 
 
@@ -163,17 +166,13 @@ def test_a_document_change_still_fails_with_exclusions_in_force(tmp_path: Path):
 
 
 # ------------------------------------------------------------------ F5-4
-def test_volatile_declaration_is_refused_when_nothing_is_excluded():
-    """F5-4: three of the four SafetyGuard constructions omitted
-    `excluded_dirs`, and the only thing protecting them was this refusal —
-    which had no test. Mutating it to `if False:` left 205/205 green."""
-    guard = SafetyGuard(["/tmp/x"], "/tmp/ws")          # no excluded dirs
+def test_volatile_declarations_are_refused_outright():
+    """F5-4 found the old guard masked by a later branch. Round 6 removed the
+    mechanism entirely, so there is no branch left to mask."""
+    guard = SafetyGuard(["/tmp/x"], "/tmp/ws")
     with pytest.raises(Exception) as e:
         guard.allow_volatile(["*/hermes/*"])
-    # Assert THIS refusal specifically. Both branches of the check raise, and
-    # the revert matrix showed a generic "excluded" substring match passes
-    # either way — so the test could not tell the guard from its fallback.
-    assert str(e.value).startswith("NO_EXCLUDED_DIRS:"), str(e.value)
+    assert "exclude_dirs" in str(e.value)
 
 
 def test_every_guard_construction_passes_excluded_dirs():

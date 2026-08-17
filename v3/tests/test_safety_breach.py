@@ -119,15 +119,14 @@ def test_a_refused_write_is_not_counted_as_our_write(tmp_path):
 
 
 # ---------------------------------------------------------------- allow-list
-def test_excluded_live_service_dirs_never_enter_the_diff(tmp_path):
+def test_excluded_live_service_dirs_are_classified_not_skipped(tmp_path):
     """Real machines have services writing their own logs continuously.
 
-    Round-5 reviewer F5-3: excusing them via the allowlist made every run
-    PASS_WITH_EXCUSES, which the audit then refused — the §84 gate was
-    unsatisfiable on the shipped config. Directories excluded from indexing are
-    now skipped by the safety walk too, so their writes never enter the diff
-    and a genuinely clean PASS is reachable. The single declaration in
-    `ingest.exclude_dirs` carries both consequences, visibly.
+    Round-5 F5-3 made the walk SKIP them, and round-6 R6-1 showed that was a
+    regression: §84 then reported PASS while a source document inside such a
+    directory was modified, deleted and renamed. The walk covers everything
+    again; exclusion now changes how a change is LABELLED, never whether it is
+    looked at.
     """
     guard, src = _guard(tmp_path)
     (src / "hermes").mkdir()
@@ -139,10 +138,11 @@ def test_excluded_live_service_dirs_never_enter_the_diff(tmp_path):
 
     beat.write_text("t1", encoding="utf-8")
 
-    clean = guard.verify_snapshot(snap)
-    assert clean["pass"] is True, clean["unexplained_modified"]
-    assert clean["verdict"] == "PASS", "an excluded service write is not an excuse"
-    assert str(beat) not in clean["modified"]
+    res = guard.verify_snapshot(snap)
+    assert res["pass"] is True, res["unexplained_modified"]
+    assert res["verdict"] == "PASS_WITH_EXCLUSIONS"
+    assert str(beat) in res["modified"], "the change must still be SEEN"
+    assert str(beat) in res["excluded_dir_modified"]
 
     # ...but the allow-list must not excuse a real document
     doc.write_text("clobbered", encoding="utf-8")

@@ -747,3 +747,100 @@ LESSON: the artifact earned its place on its first run. Two rounds of my own
 assertions had already covered this ground and missed both. "I checked" is a
 claim; a script anyone can re-run is evidence — and the difference is not
 diligence, it is that one of them can be wrong without anybody noticing.
+
+
+**F-V3-44 / §84 / my own round-5 fix broke the guarantee it was protecting** —
+SYMPTOM: the round-6 reviewer modified, deleted and renamed source documents
+and `safety verify` reported `pass: True`, `verdict: PASS`, `modified: []`, and
+`reviewer.audit` certified DATA_SAFETY. ROOT CAUSE: F5-3 made `_walk_sources()`
+SKIP `ingest.exclude_dirs`. Excluded directories were not excused — they were
+never examined. The shipped list contains generic names (`models`, `build`,
+`dist`, `checkpoints`) and `_is_excluded_dir` matches ANY path component, so
+`E:\Projects\Dawson\Models\` was outside §84 with no operator mistake
+required; and excluding a directory became sufficient on its own to make its
+contents unwatchable, routing around both N4-6 (patterns must name an excluded
+dir) and N4-6c (the audit refuses PASS_WITH_EXCUSES) at once. The code comment
+justifying it — "these directories hold no documents (that is what excluding
+them from indexing asserts)" — is a non-sequitur: exclusion from indexing
+asserts NOT WORTH INDEXING, while §1 protects the user's FILES. Those two sets
+were identical before that change and were not after.
+FIX: the walk covers every file again. Changes inside excluded directories are
+CLASSIFIED — `excluded_dir_modified` / `excluded_dir_deleted`, reported,
+counted, surfaced in the audit detail — rather than omitted, and do not fail
+`pass`. A DOCUMENT changing inside an excluded directory DOES fail, because
+that means the exclusion list overlaps the corpus. The report `note` said
+"'pass' fails on ANY change to a source file", which had become false; it now
+describes what the check actually does.
+ALSO REMOVED: the per-path volatile allowlist, entirely. It was bounded in
+round 2, re-bounded in round 4 after accepting `*` and then `*/Dawson/*`, and
+in round 5 its own guard was found masked by a later branch. With full walk
+coverage and excluded-dir classification it had no remaining purpose except as
+a bypass surface. A mechanism whose only effect is to weaken a guarantee is
+better deleted than bounded.
+RESULT: `test_a_document_inside_an_excluded_dir_fails_the_verdict`,
+`test_a_document_deleted_inside_an_excluded_dir_fails`,
+`test_excluded_dir_match_is_by_component_not_leaf`,
+`test_excluded_live_service_dirs_are_classified_not_skipped`, and the whole
+`test_the_volatile_allowlist_is_gone` family.
+LESSON: I made an unsatisfiable gate satisfiable by making it stop looking, and
+wrote a justification for it that sounded structural. The reviewer's sentence
+is the one to keep: "A gate that passes because it stopped looking is worse
+than one that cannot pass, because the operator believes it."
+
+**F-V3-45 / grounding / a title block answered a money question** — SYMPTOM:
+evidence reading only "SKYPARK TOWERS — PODIUM LANDSCAPE GA — SHEET 3 OF 40 —
+SCALE 1:200" was returned SUPPORTED, unflagged, for "what is the final claim
+amount for the Skypark Towers podium?" ROOT CAUSE: F5-1 subtracted terms
+belonging to MANIFEST PROJECT LABELS, and a title block is full of words that
+are not labels — the development name, the drawing title, the client, the
+consultant — so two of them cleared the floor. Round 5 had stated F5-1 as "a
+title block returned SUPPORTED for a money question"; the word-order dependency
+was genuinely fixed and the headline symptom was not. FIX: a question that asks
+for a figure or a date cannot be answered from evidence containing neither —
+keyed on the material, the same move as F5-5, using machinery that already
+existed and was wired only to the unattributed path. Deliberately narrowed to
+QUANTITATIVE_INTENT after the first version refused "what is the approval
+status?", whose answer is legitimately a word: a guard that refuses correct
+answers gets removed.
+RESULT: `test_a_figure_question_is_not_answered_by_a_title_block` (6 cases),
+`test_a_figure_question_is_answered_when_the_figure_is_there`,
+`test_the_query_side_trigger_still_works_on_figureless_evidence` (pins the
+boundary).
+LESSON: fourth consecutive round in which the quoted example closed and the
+class did not. The example is an illustration; the finding is the class.
+
+**F-V3-46 / retrieval / my F5-2 fix put bare numbers in the exact-ID index** —
+SYMPTOM: "A-1234 Planting Schedule.pdf" indexed the bare number `1234`, so
+"what does grid 12-34 show?" scored an exact hit on it at RRF weight 2.0 — the
+heaviest in the system — putting an unrelated document at the top of the fused
+list, which without a project hint is a §60 wrong-project route. The same rule
+also wrote pure words (`LANDSCAPE`, `CSLANDSCAPE`): 12 id rows per chunk that
+no query can reach, since `harvest_ids` requires a digit. FIX: a window must
+carry both a letter and a digit. Also R6-3b: `_query_doc_codes` now expands
+through `code_variants` too — F5-2 had fixed only the index side, so pasting a
+full sheet number from an email missed the short filename on disk while the
+reverse direction worked.
+RESULT: `test_bare_numbers_are_not_document_identifiers`,
+`test_query_side_codes_are_expanded_to_variants`.
+LESSON: a fix that broadens an index broadens what can match wrongly. I checked
+that the intended lookups started working and not that the unintended ones
+stayed broken.
+
+**F-V3-47 / test coverage / the matrix I submitted overstated its own result** —
+SYMPTOM: I reported "40 of 40 mutations caught" as evidence the fixes were
+guarded. The reviewer wrote 15 mutations of its own against the newest code and
+6 came back GREEN, including the dense leg's project scoping, the second-pass
+`known_projects` argument, and the `DATE_RE` half of F5-5 — whose mutation
+disabled three mechanisms at once and reported a single RED. When I then added
+the reviewer's mutations plus ones for my own round-6 fixes, **10 of 14 came
+back GREEN**, including four fixes I had written earlier in the same round with
+no tests behind them at all. ROOT CAUSE: the mutation SET was drawn from what
+previous reviewers had named. A self-authored test of my own claims inherits my
+blind spots by construction. FIX: the reviewer's seven mutations added, F5-5
+split into four (query regex / money / date / quantity), and the rule ONE
+MUTATION, ONE MECHANISM written into the script's docstring so the next round
+can be checked against it.
+LESSON: the artifact was still a self-report. It made my claim checkable, which
+is real progress, but "my checker found nothing" and "there is nothing" are
+different statements, and only an adversary can close the gap. The exit code
+means "no mutation I thought of survived".

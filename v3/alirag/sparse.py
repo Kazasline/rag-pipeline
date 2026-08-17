@@ -95,7 +95,20 @@ def code_variants(text: str, limit: int = 60) -> set:
         for i in range(len(parts)):
             for j in range(i + 1, len(parts) + 1):
                 window = "".join(parts[i:j]).upper()
-                # a single bare part is not an identifier on its own
+                # A window is an identifier only if it carries BOTH a letter
+                # and a digit.
+                #
+                # Round-6 reviewer R6-3: the old rule admitted any single part
+                # of 4+ characters, so "A-1234 Planting Schedule.pdf" indexed
+                # the bare number "1234" — and "what does grid 12-34 show?"
+                # then produced an exact hit on it at RRF weight 2.0, the
+                # heaviest in the system, putting an unrelated document at the
+                # top of the fused list. It also wrote pure words like
+                # "LANDSCAPE" that no query can ever reach, since harvest_ids
+                # requires a digit: 12 id rows per chunk across 662k files.
+                if not (any(c.isalpha() for c in window)
+                        and any(c.isdigit() for c in window)):
+                    continue
                 if j - i > 1 or len(window) >= 4:
                     out.add(window)
         if len(out) >= MAX_CODE_VARIANTS:
