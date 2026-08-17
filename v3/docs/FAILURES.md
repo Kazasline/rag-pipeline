@@ -73,3 +73,20 @@ against the FILENAME only (a parent folder describes the project, not this
 file's type); discipline still may come from folders. RESULT: four regression
 tests in `test_regressions.py`, all green.
 LESSON: substring matching over paths silently manufactures metadata at scale.
+
+**F-V3-05 / 2026-08-17 / Phase 0 inspector / reported "Qwen3.8-27B does not
+exist" when the model was in fact installed** — SYMPTOM: the inspection report
+listed only Ollama-registered models, so a Qwen downloaded through Unsloth was
+invisible and the config was drafted around the wrong model. ROOT CAUSE: the
+inspector asked the *servers* what they had (Ollama API, LM Studio/vLLM ports)
+and never looked at the *filesystem*. Weights pulled via Unsloth or the
+HuggingFace cache belong to no server until one is started, so a server-only
+probe under-reports what is installed. §3 explicitly lists Unsloth among the
+things to inspect; it was omitted. FIX: added a bounded read-only weight scan
+(`find_local_models`) over HF/Unsloth/LM Studio/Ollama caches and common model
+directories, reporting path, size and quantization; added detection of the
+`unsloth`/`llama_cpp`/`vllm` Python packages; added the `weights_without_server`
+flag for the real state "model present, nothing serving it". RESULT: verified
+against a synthetic model tree; awaiting re-run on the target machine.
+LESSON: "not found by the API I happened to query" is not "not installed" —
+inspect the disk, not just the daemons.
