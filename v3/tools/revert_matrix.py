@@ -213,26 +213,28 @@ MUTATIONS: list[tuple[str, str, str, str, str]] = [
      "                      if False else [])"),
 
     # ---------------------------------------------------------- data safety
-    ("N4-6a", "over-broad volatile patterns accepted",
+    ("N4-6a", "the volatile allowlist comes back",
      "alirag/safety.py",
-     "            _reject_overbroad_pattern(pat, self.excluded_dirs)",
-     "            pass"),
-    ("F5-4", "volatile patterns accepted when no excluded dirs are configured",
-     "alirag/safety.py",
-     "    if not allowed:\n        raise VolatilePatternRejected(",
-     "    if False:\n        raise VolatilePatternRejected("),
-    ("F5-3", "safety walk ignores excluded directories",
-     "alirag/safety.py",
-     "                if self._is_excluded_dir(dp):",
-     "                if False:"),
-    ("N4-6c", "audit certifies a run carried by an allowlist",
+     "        raise VolatilePatternRejected(\n"
+     "            \"volatile_patterns is removed.",
+     "        self.volatile_patterns = tuple(patterns)\n"
+     "        return\n"
+     "        raise VolatilePatternRejected(\n"
+     "            \"volatile_patterns is removed."),
+
+    ("N4-6c", "audit certifies a run it should refuse",
      "alirag/reviewer.py",
-     "             safety.get(\"verdict\", \"PASS\" if safety.get(\"pass\") else \"FAIL\") == \"PASS\"",
-     "             bool(safety.get(\"pass\"))"),
-    ("R3-7b", "clean pass indistinguishable from an excused one",
+     "             in (\"PASS\", \"PASS_WITH_EXCLUSIONS\")",
+     "             in (\"PASS\", \"PASS_WITH_EXCLUSIONS\", \"FAIL\")"),
+    ("N4-6d", "audit certifies despite documents changing in an excluded dir",
+     "alirag/reviewer.py",
+     "             and not (safety.get(\"excluded_dir_documents_modified\")\n"
+     "                      or safety.get(\"excluded_dir_documents_deleted\"))),",
+     "             ),"),
+    ("R3-7b", "clean pass indistinguishable from one carried by exclusions",
      "alirag/safety.py",
-     "        verdict = (\"PASS\" if passed and not excused else",
-     "        verdict = (\"PASS\" if passed else"),
+     "                   \"PASS_WITH_EXCLUSIONS\" if excluded_changed else",
+     "                   \"PASS\" if excluded_changed else"),
     ("HASH", "snapshot hashes not recorded",
      "alirag/safety.py",
      "            \"hashed\": any(r.get(\"h\") for r in before.values()),",

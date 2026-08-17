@@ -262,3 +262,32 @@ def test_excluded_dir_match_is_by_component_not_leaf(tmp_path: Path):
     res = guard.verify_snapshot(snap)
     assert str(beat) in res["excluded_dir_modified"], res
     assert res["pass"] is True
+
+
+# ------------------------------------------------------------------ isolation
+# The matrix reported F5-1 and N4-4 unguarded after R6-2 landed: R6-2's
+# shape check refuses the money questions those tests used, so it caught the
+# failure first and their own mechanism was never exercised. A test that only
+# passes because a LATER guard fires proves nothing about the earlier one.
+# These use NON-quantitative questions, where R6-2 cannot mask anything.
+def test_project_name_only_evidence_fails_a_non_quantitative_question():
+    """F5-1, isolated from R6-2."""
+    tb = {"chunk_id": 1,
+          "text": "DAWSON MERIDIAN TOWERS — Drawing title block. Scale 1:100.",
+          "filename": "titleblock.pdf", "project": "Dawson", "revision": "R01",
+          "superseded_by": None, "sources": ["dense"]}
+    v = verify([tb], query="which tree species is planted at Dawson Meridian Towers?",
+               known_projects=["Dawson Meridian Towers"])
+    assert v.status == "INSUFFICIENT", (v.status, v.flags)
+
+
+def test_naming_a_file_caps_a_non_quantitative_answer_at_partial():
+    """N4-4, isolated from R6-2: the user named the document, so it is returned
+    — but nothing in it met the content floor, so the answer can never read as
+    SUPPORTED."""
+    ev = [{"chunk_id": 1, "text": "Scaffolding hire, March delivery note.",
+           "filename": "L-201.pdf", "project": "Dawson", "revision": "R01",
+           "superseded_by": None, "sources": ["exact"]}]
+    v = verify(ev, query="which planting zones does drawing L-201 cover?")
+    assert v.status == "PARTIAL", (v.status, v.flags)
+    assert any("not because its content answers" in f for f in v.flags), v.flags

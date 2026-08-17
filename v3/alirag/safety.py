@@ -47,7 +47,6 @@ shown not to be the writer.
 
 from __future__ import annotations
 
-import fnmatch
 import hashlib
 import json
 import os
@@ -93,52 +92,6 @@ _DOCUMENT_EXTS = (
 )
 
 
-def _reject_overbroad_pattern(pat: str, excluded_dirs=()) -> None:
-    r"""A volatile declaration must name a directory the operator has ALREADY
-    excluded from indexing.
-
-    Round-4 reviewer N4-6: the round-3 version refused only bare globs and bare
-    document-extension globs, which was the two literal strings the reviewer
-    had cited rather than the class of defect. A single directory-anchored
-    pattern naming the corpus itself — `*/Dawson/*`, `*/Tender/*`,
-    `*/sources/*` — was accepted, and with it a tender could be rewritten and
-    an instruction deleted while §84 reported `pass: True`.
-
-    The rule is now positive rather than a blocklist: the ONLY paths whose
-    changes may be excused are those inside a directory already declared
-    non-knowledge (`ingest.exclude_dirs`). `*/hermes/*` qualifies because
-    hermes is excluded from indexing; `*/Dawson/*` does not, because Dawson is
-    the corpus. A blocklist has to anticipate every way of naming the corpus;
-    this cannot be widened without the operator also declaring, elsewhere and
-    visibly, that the directory holds nothing worth indexing.
-    """
-    p = (pat or "").strip().replace("\\", "/")
-    if not p:
-        raise VolatilePatternRejected("empty volatile pattern")
-    if not p.strip("*/ "):
-        raise VolatilePatternRejected(
-            f"volatile pattern {pat!r} matches everything. It would excuse any "
-            "change to any original file, which is the opposite of what §84 "
-            "verifies.")
-    components = {c.strip().lower() for c in p.split("/") if c.strip("* ")}
-    allowed = {d.lower() for d in excluded_dirs}
-    if not allowed:
-        raise VolatilePatternRejected(
-            f"NO_EXCLUDED_DIRS: volatile pattern {pat!r} cannot be checked "
-            "because no excluded directories are configured, so there is no "
-            "directory whose contents are known not to be documents. This "
-            "guard is what protects a SafetyGuard built without "
-            "`excluded_dirs=` from accepting an unbounded allowlist.")
-    hit = {c.strip("*") for c in components} & allowed
-    if not hit:
-        raise VolatilePatternRejected(
-            f"volatile pattern {pat!r} does not name any directory excluded "
-            f"from indexing (ingest.exclude_dirs). Only a directory the "
-            "operator has already declared non-knowledge may have its changes "
-            "excused; anything else is the corpus §84 exists to protect. "
-            f"Excluded directories include: {sorted(allowed)[:6]}")
-
-
 class SafetyGuard:
     def __init__(self, source_roots: list[str], workspace: str,
                  excluded_dirs=()):
@@ -152,7 +105,7 @@ class SafetyGuard:
         # No per-path allowlist exists any more (see allow_volatile). Kept as
         # an always-empty attribute so older callers reading it see the truth
         # rather than an AttributeError.
-        self.volatile_patterns: list[str] = []
+        self.volatile_patterns: tuple = ()
 
     # ------------------------------------------------------------ helpers
     def _under(self, path: Path, root: Path) -> bool:
@@ -191,11 +144,6 @@ class SafetyGuard:
             "ingest.exclude_dirs instead: changes inside it are then reported "
             "under excluded_dir_* without failing §84, and the declaration is "
             f"visible in config. Rejected: {list(patterns)[:4]}")
-
-    def _is_volatile(self, path: str) -> bool:
-        norm = path.replace("\\", "/")
-        return any(fnmatch.fnmatch(norm, pat.replace("\\", "/"))
-                   for pat in self.volatile_patterns)
 
     # ------------------------------------------------------------ enforced API
     def source_open(self, path: str | os.PathLike):

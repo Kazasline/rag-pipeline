@@ -844,3 +844,30 @@ LESSON: the artifact was still a self-report. It made my claim checkable, which
 is real progress, but "my checker found nothing" and "there is nothing" are
 different statements, and only an adversary can close the gap. The exit code
 means "no mutation I thought of survived".
+
+
+**F-V3-48 / test coverage / a new guard masked two older ones** — SYMPTOM: the
+matrix run after the round-6 fixes reported F5-1 (project-name-only evidence)
+and N4-4 (naming a file certifies its content) as UNGUARDED, although both had
+passing tests written for them in earlier rounds. ROOT CAUSE: both tests used
+MONEY questions, and the newly added R6-2 shape check refuses those before
+either mechanism is reached. The tests still passed — for the wrong reason —
+and would have kept passing with their own subject deleted. FIX: isolating
+tests that use NON-quantitative questions, where R6-2 cannot intervene.
+LESSON: adding a guard can silently disarm the tests for the guards behind it.
+Every new check that can short-circuit an existing one invalidates the tests
+downstream of it, and nothing in a green suite says so. Only re-running the
+whole matrix after each change surfaces it — which is the argument for the
+matrix being routine rather than something produced when a reviewer asks.
+
+**F-V3-49 / dead code that looked like a fix** — `_reject_overbroad_pattern`
+and `_is_volatile` survived the removal of the volatile allowlist, unreachable
+because `allow_volatile` now raises before calling them. The matrix reported
+F5-4 unguarded; the truth was that there was nothing left to break. Deleted,
+with the `fnmatch` import. Four other mutations came back STALE for the same
+reason — they targeted the allowlist — and were rewritten against the
+excluded-directory logic that replaced it.
+LESSON: this is the second time (after N4-3b) that "unguarded fix" turned out
+to mean "unreachable code". The matrix cannot tell those apart, so a GREEN
+result is a question — is this untested, or is it dead? — and both answers
+require an edit.
