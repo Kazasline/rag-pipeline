@@ -308,6 +308,33 @@ def _pipeline_version() -> str:
     return PIPELINE_VERSION
 
 
+# Directory names that mean "this is where the old copy went", not "this is a
+# different subject". F-V3-21: revision families were keyed on the literal
+# parent directory, so the near-universal practice of moving the previous sheet
+# into a SUPERSEDED\ subfolder broke the chain — R00 and R01 became unrelated
+# documents, and a citation of the obsolete sheet carried no §62 disclosure.
+ARCHIVE_DIR_RE = re.compile(
+    r"^(superse+ded|supercede+d|old|older|archive[sd]?|arkib|previous|prev|"
+    r"obsolete|void|voided|not\s*for\s*use|backup|history|lama|"
+    r"\d{4}(-\d{2})?)$", re.IGNORECASE)
+
+
+def _family_dir(path: str) -> str:
+    """Directory a revision family belongs to, with archival subfolders folded
+    back into their parent.
+
+    'E:/Dawson/Drawings/SUPERSEDED/2024' -> 'e:/dawson/drawings'
+
+    Only ARCHIVE-named components are stripped, so two genuinely different
+    folders ('Drawings/Softscape' vs 'Drawings/Hardscape') still keep their
+    same-named sheets apart.
+    """
+    p = Path(path).parent
+    while p.name and ARCHIVE_DIR_RE.match(p.name) and p.parent != p:
+        p = p.parent
+    return str(p).lower().replace("\\", "/")
+
+
 def _family_key(stem: str) -> str | None:
     """Filename stem with its revision token removed -> revision-family key."""
     m = REV_RE.search(stem)
@@ -330,18 +357,24 @@ def _rev_sort_key(rev: str):
 
 
 def link_revision_families(mf: Manifest) -> int:
-    """Detect R00 -> R01 -> ... chains among files in the same directory with
-    the same de-revisioned stem, and link supersedes/superseded_by (§27).
-    Every revision is kept; nothing is removed."""
+    """Detect R00 -> R01 -> ... chains among files with the same de-revisioned
+    stem in the same directory — or in an archival subfolder of it, which is
+    where superseded sheets are normally filed — and link
+    supersedes/superseded_by (§27). Every revision is kept; nothing is removed."""
     rows = mf.con.execute(
-        "SELECT file_id, original_path, filename, revision FROM files "
+        "SELECT file_id, original_path, filename, revision, project FROM files "
         "WHERE revision != 'UNKNOWN'").fetchall()
     families: dict[tuple, list] = {}
     for r in rows:
         key = _family_key(Path(r["filename"]).stem)
         if key is None:
             continue
-        families.setdefault((str(Path(r["original_path"]).parent).lower(), key), []).append(r)
+        # project is part of the key: two projects may each own a 'Layout Plan
+        # R01', and linking those would assert a supersede relation that does
+        # not exist (§4 — never invent metadata).
+        families.setdefault(
+            (_family_dir(r["original_path"]), (r["project"] or "").lower(), key),
+            []).append(r)
     links = 0
     for members in families.values():
         if len(members) < 2:

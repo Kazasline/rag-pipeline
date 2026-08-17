@@ -1,22 +1,31 @@
 # PROJECT_STATE — ALI RAG V3
 
-_Last update: 2026-08-17, after the first on-machine Phase 0/1 run._
+_Last update: 2026-08-17, after the first independent reviewer audit and the
+fix pass that followed it._
 
 ## Where we are
 
 ```
-✅ PHASE 0-15   code built + 56 tests green
+✅ PHASE 0-15   code built + 118 tests green
 ✅ PHASE 0      EXECUTED on the target machine (2026-08-17)
 ✅ PHASE 1      EXECUTED — 20,000-file pilot inventory of E:\
-🔄 PHASE 5-15   installed on the machine; pilot ingest + first queries pending
+✅ PHASE 5-15   installed; 313 files ingested, first grounded answers returned
 ⬜ PHASE 16     benchmark (needs a human-reviewed question set)
-⬜ PHASE 17-19  independent reviewer, fixes, regression
+🔄 PHASE 17-19  independent reviewer ran and FAILED 3 of 6 categories;
+                every finding is now fixed with a test that fails before the
+                fix. Re-audit pending — the reviewer, not the builder, decides.
 ⬜ PHASE 20     final docs with real numbers
 ```
 
-**No latency, recall or TTFT number has been measured yet.** `BENCHMARK.md`
-is deliberately empty of results and `alirag review` reports PENDING for every
-category lacking evidence.
+**Nothing here is signed off.** The builder cannot self-certify (§51); the
+reviewer's first verdict was FAIL and the second has not been issued.
+
+**Measured so far:** per-stage query latency from real traces on the target
+machine (see `BENCHMARK.md`), and end-to-end answers on 313 ingested files.
+**Not yet measured:** recall, MRR, citation-page accuracy and wrong-project
+rate — all four need the human-reviewed question set (§43/§44), and the
+harness refuses to score an unreviewed one. `alirag review` reports PENDING for
+every category lacking an evidence artifact.
 
 ## Measured facts about the target machine (Phase 0, 2026-08-17)
 

@@ -75,11 +75,54 @@ def test_conflict_surfaced_across_amounts(ingested):
     cfg, _ = ingested
     eng = Engine(cfg)
     resp = eng.query("deep: final claim amount certified", use_llm=False)
-    # amounts differ across revisions/projects -> either conflict reported or
-    # project filter reduced evidence to one amount; both are honest outcomes
-    assert resp["evidence_status"] in ("SUPPORTED", "PARTIAL", "INSUFFICIENT")
+    assert resp["evidence_status"] in ("SUPPORTED", "PARTIAL", "INSUFFICIENT",
+                                       "AMBIGUOUS_PROJECT")
     if len({s["project"] for s in resp["sources"]}) > 1:
         assert resp["conflicts"] or resp["verifier_flags"]
+    eng.close()
+
+
+def test_multi_project_question_asks_instead_of_merging(ingested):
+    """§60: 'final claim amount' matches Dawson (RM50,569.30) and Meridian
+    (RM99,111.22). Merging them into one answer with a warning attached is a
+    wrong-project answer wearing a caveat — the question must come back."""
+    cfg, _ = ingested
+    eng = Engine(cfg)
+    resp = eng.query("deep: final claim amount certified", use_llm=False)
+    projects = {s["project"] for s in resp["sources"]}
+    if len(projects) > 1:
+        assert resp["evidence_status"] == "AMBIGUOUS_PROJECT"
+        assert set(resp["projects"]) == projects
+        # the reply must name the projects and ask, not state an amount
+        assert "which project" in resp["answer"].lower()
+        for p in projects:
+            assert p in resp["answer"]
+        assert "RM50,569.30" not in resp["answer"]
+        assert "RM99,111.22" not in resp["answer"]
+    eng.close()
+
+
+def test_explicit_cross_project_question_is_answered(ingested):
+    """The clarification must not become a wall: asking across all projects
+    is a legitimate question and still gets a merged answer."""
+    cfg, _ = ingested
+    eng = Engine(cfg)
+    resp = eng.query("final claim amount across all projects", use_llm=False)
+    assert resp["evidence_status"] != "AMBIGUOUS_PROJECT"
+    if len({s["project"] for s in resp["sources"]}) > 1:
+        assert any("cross-project" in f for f in resp["verifier_flags"])
+    eng.close()
+
+
+def test_ambiguous_project_reply_is_not_cached(ingested):
+    """A clarification is not an answer; caching it would keep serving the
+    question back after the user has answered it."""
+    cfg, _ = ingested
+    eng = Engine(cfg)
+    r1 = eng.query("deep: final claim amount certified", use_llm=False)
+    if r1["evidence_status"] == "AMBIGUOUS_PROJECT":
+        r2 = eng.query("deep: final claim amount certified", use_llm=False)
+        assert not r2["cached"]
     eng.close()
 
 

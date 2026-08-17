@@ -7,7 +7,18 @@ optional: the CLI works without fastapi installed.
 Run:  alirag serve      (uvicorn, 127.0.0.1:8642)
 """
 
-from __future__ import annotations
+# NOTE: deliberately NO `from __future__ import annotations` here.
+#
+# F-V3-22: with deferred annotations every parameter annotation becomes a
+# string, and FastAPI resolves them with get_type_hints() against the MODULE
+# globals. `QueryIn` is defined inside create_app() (pydantic can only be
+# imported lazily — §52 keeps fastapi optional), so the name was unresolvable,
+# FastAPI fell back to treating the request body as a query parameter, and
+# every POST /query and /explain answered 422 Unprocessable Entity. The whole
+# HTTP API was dead and nothing caught it because api.py had no tests.
+#
+# `X | None` is valid at runtime on the target Python (3.11), so nothing here
+# needs the future import.
 
 from .answer import Engine
 from .config import Config, load_config

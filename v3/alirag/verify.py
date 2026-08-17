@@ -59,14 +59,17 @@ def _content_terms(text: str) -> set:
 
 @dataclass
 class Verdict:
-    status: str                      # SUPPORTED | PARTIAL | INSUFFICIENT
+    status: str      # SUPPORTED | PARTIAL | INSUFFICIENT | AMBIGUOUS_PROJECT
     kept: list = field(default_factory=list)
     flags: list = field(default_factory=list)
     conflicts: list = field(default_factory=list)
+    # populated for AMBIGUOUS_PROJECT: {project: [evidence, ...]}
+    by_project: dict = field(default_factory=dict)
 
 
 def verify(evidence: list[dict], project_hint: str | None = None,
-           min_evidence: int = 1, query: str = "") -> Verdict:
+           min_evidence: int = 1, query: str = "",
+           cross_project: bool = False) -> Verdict:
     flags: list[str] = []
     conflicts: list[str] = []
     kept = list(evidence)
@@ -125,9 +128,18 @@ def verify(evidence: list[dict], project_hint: str | None = None,
             flags.append(f"query targets '{project_hint}' but no evidence matches "
                          "that project")
             return Verdict("INSUFFICIENT", [], flags, [])
-    elif len(projects) > 1:
-        flags.append(f"evidence spans multiple projects: {sorted(projects)} — "
-                     "verify the answer does not mix them")
+    # Ambiguity is DECIDED here but REPORTED at the end, so that revision
+    # currency and conflict surfacing still run over the evidence — the
+    # clarification lists the same ordered, disclosed items the answer would
+    # have used.
+    ambiguous = len(projects) > 1 and not project_hint and not cross_project
+    if len(projects) > 1 and not project_hint:
+        if cross_project:
+            flags.append("cross-project question: evidence merged from "
+                         f"{sorted(projects)} as asked")
+        else:
+            flags.append(f"evidence spans multiple projects: {sorted(projects)}"
+                         " — answering would mix them; asking which one instead")
 
     # ---- revision currency (§62)
     superseded = [e for e in kept if e.get("superseded_by")]
@@ -154,7 +166,25 @@ def verify(evidence: list[dict], project_hint: str | None = None,
     if len(kept) < min_evidence:
         return Verdict("INSUFFICIENT", kept, flags + ["insufficient evidence"],
                        conflicts)
+
+    # ---- multi-project ambiguity (§60)
+    #
+    # Do NOT merge and warn. The previous behaviour built one answer out of
+    # documents belonging to different clients and appended a note asking the
+    # reader to check it. For "what is the final claim amount?" that yields a
+    # single figure with no way to tell whose project it came from — a
+    # wrong-project answer dressed as a caveat, and a confidentiality problem
+    # besides (§2). The question is genuinely ambiguous, so say so and let the
+    # asker choose. An explicit cross-project question still gets the merged
+    # treatment it asked for.
+    if ambiguous:
+        grouped: dict[str, list] = {}
+        for e in kept:
+            p = e.get("project")
+            if p and p != "UNKNOWN":
+                grouped.setdefault(p, []).append(e)
+        return Verdict("AMBIGUOUS_PROJECT", kept, flags, conflicts, grouped)
     status = "SUPPORTED"
-    if conflicts or any("multiple projects" in f for f in flags):
+    if conflicts or any("cross-project question" in f for f in flags):
         status = "PARTIAL"
     return Verdict(status, kept, flags, conflicts)

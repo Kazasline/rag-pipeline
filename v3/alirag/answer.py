@@ -154,7 +154,7 @@ class Engine:
         # rows (microseconds), and wrong-project control (§60) matters in FAST
         # just as much as in DEEP — only the LLM-side depth differs per mode.
         verdict = verify(evidence, project_hint=r.project_hint,
-                         query=r.cleaned_query)
+                         query=r.cleaned_query, cross_project=r.cross_project)
         trace.set("evidence_status", verdict.status)
         trace.set("verifier_flags", verdict.flags)
 
@@ -177,7 +177,8 @@ class Engine:
         # F-V3-12: never cache a failed generation. An empty answer was stored
         # under PARTIAL and then served back after the bug was fixed, so the
         # failure outlived its cause and looked unfixed.
-        cacheable = (resp.get("evidence_status") != "INSUFFICIENT"
+        cacheable = (resp.get("evidence_status") not in ("INSUFFICIENT",
+                                                         "AMBIGUOUS_PROJECT")
                      and not resp.get("generation_error"))
         if use_cache and cacheable:
             try:
@@ -194,6 +195,23 @@ class Engine:
                 "verifier_flags": verdict.flags, "conflicts": verdict.conflicts,
                 "sources": [_source_line(h) for h in verdict.kept],
                 "cached": False}
+
+        # §60: an ambiguous question gets a question back, not a blended answer.
+        if verdict.status == "AMBIGUOUS_PROJECT":
+            lines = []
+            for proj, items in sorted(verdict.by_project.items(),
+                                      key=lambda kv: (-len(kv[1]), kv[0])):
+                names = sorted({i["filename"] for i in items})[:3]
+                lines.append(f"  - {proj}: {len(items)} evidence item(s) "
+                             f"({', '.join(names)})")
+            return {**base, "evidence_score": 0.0,
+                    "projects": sorted(verdict.by_project),
+                    "answer": (
+                        "This question matches documents from more than one "
+                        "project, and the answers would differ. Tell me which "
+                        "project you mean and I will answer from that one only "
+                        "(or say 'across all projects' to compare them):\n"
+                        + "\n".join(lines))}
 
         if verdict.status == "INSUFFICIENT":
             found = "; ".join(f"{h['filename']} ({h.get('locator') or ''})"

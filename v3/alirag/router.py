@@ -53,6 +53,17 @@ FULLSWING_INTENT = [
     r"\bcausal\b", r"\broot cause\b.*\bclaim\b", r"\bsemua (projek|dokumen)\b",
 ]
 
+# Explicit permission to answer from more than one project at once (§60).
+# Without one of these, evidence spanning several projects is treated as an
+# ambiguous question, not as material to merge into a single answer.
+CROSS_PROJECT_INTENT = [
+    r"\bacross (all|every|multiple|both) projects?\b",
+    r"\ball projects\b", r"\bevery project\b", r"\bany project\b",
+    r"\bcompare\b.*\bprojects?\b", r"\bprojects?\b.*\bcompare\b",
+    r"\bsemua projek\b", r"\bmerentas projek\b", r"\bsetiap projek\b",
+    r"\bbanding\w*\b.*\bprojek\b",
+]
+
 # leading command forms: "fast:", "cepat -", "deep check ...", "phd:"
 _CMD_RE = re.compile(
     r"^\s*(?P<cmd>[a-z ]{3,24}?)\s*[:\-—]\s*(?P<rest>.+)$", re.IGNORECASE | re.DOTALL)
@@ -66,6 +77,7 @@ class Route:
     explicit: bool = False
     exact_ids: list = field(default_factory=list)
     project_hint: str | None = None
+    cross_project: bool = False     # user explicitly asked across projects (§60)
 
 
 def _match_trigger(text: str, triggers: list[str]) -> str | None:
@@ -108,27 +120,28 @@ def route(query: str, known_projects: list[str] | None = None) -> Route:
 
     exact_ids = harvest_ids(cleaned, limit=6)
     project_hint = _project_hint(cleaned, known_projects or [])
+    # Judged on the ORIGINAL query: an explicit command prefix strips text from
+    # `cleaned`, and "all projects" must not be lost with it.
+    cross = any(re.search(rx, q.lower()) for rx in CROSS_PROJECT_INTENT)
+    common = {"exact_ids": exact_ids, "project_hint": project_hint,
+              "cross_project": cross}
 
     if explicit_mode:
-        return Route(explicit_mode, reason, cleaned.strip(), explicit=True,
-                     exact_ids=exact_ids, project_hint=project_hint)
+        return Route(explicit_mode, reason, cleaned.strip(), explicit=True, **common)
 
     # 2. complexity -> FULLSWING
     ql = cleaned.lower()
     for rx in FULLSWING_INTENT:
         if re.search(rx, ql):
-            return Route("FULLSWING", f"complexity signal /{rx}/", cleaned,
-                         exact_ids=exact_ids, project_hint=project_hint)
+            return Route("FULLSWING", f"complexity signal /{rx}/", cleaned, **common)
 
     # 3. document interpretation -> DEEP
     for rx in DEEP_INTENT:
         if re.search(rx, ql):
-            return Route("DEEP", f"document-intent signal /{rx}/", cleaned,
-                         exact_ids=exact_ids, project_hint=project_hint)
+            return Route("DEEP", f"document-intent signal /{rx}/", cleaned, **common)
 
     # 4. default FAST (exact locators and simple lookups belong here, §56)
-    return Route("FAST", "default (simple corpus lookup)", cleaned,
-                 exact_ids=exact_ids, project_hint=project_hint)
+    return Route("FAST", "default (simple corpus lookup)", cleaned, **common)
 
 
 def _project_hint(query: str, known_projects: list[str]) -> str | None:

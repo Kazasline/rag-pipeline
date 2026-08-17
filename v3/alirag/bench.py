@@ -172,7 +172,13 @@ def run_retrieval_bench(cfg: Config, questions_path: Path,
         wrong_project = any(
             s.get("project") not in (expected_project, "UNKNOWN", None)
             for s in resp.get("sources", [])[:3])
+        # Which retrieval legs actually contributed. §86 asks whether each
+        # layer earns its complexity; that cannot be checked from recall alone
+        # if the "baseline" silently still ran the full stack.
+        sources_used = sorted({leg for s in resp.get("sources", [])
+                               for leg in (s.get("retrievers") or [])})
         per_q.append({"q": rec["q"], "kind": rec.get("kind"), "mode": resp["mode"],
+                      "sources_used": sources_used,
                       "first_rank": first, "page_ok": page_ok,
                       "wrong_project_in_top3": wrong_project,
                       "evidence_status": resp["evidence_status"],

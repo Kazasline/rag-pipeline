@@ -322,3 +322,59 @@ repeat run verified against a snapshot from first install (covering days of
 unrelated user activity) or crashed if setup had been skipped. The flagship
 script did not perform the snapshot→work→verify sequence it advertised. Fixed:
 it now snapshots immediately before ingest.
+
+**F-V3-21 / revision families / superseded copies never linked** — SYMPTOM: on
+the real corpus, revision chains were detected only when both revisions sat in
+the same folder. ROOT CAUSE: `link_revision_families` keyed families on the
+literal parent directory, but the near-universal filing practice is to MOVE the
+previous sheet into a `SUPERSEDED\` (or `OLD\`, `ARCHIVE\`, `2024\`) subfolder.
+R00 and R01 therefore became unrelated documents: no `superseded_by`, no
+SUPERSEDES edge, and no §62 disclosure when the obsolete sheet was cited — the
+system would answer from a voided drawing with no warning. FIX: `_family_dir()`
+folds archival subfolders back into their parent before keying, and `project` is
+now part of the key so two projects each owning a "Layout Plan R01" are not
+linked to each other (§4 — never invent metadata). RESULT:
+`test_revision_family_links_across_superseded_subfolder` (fails against the old
+key), `test_family_dir_folds_archive_folders_but_not_real_ones`,
+`test_same_named_revisions_in_different_projects_are_not_linked`.
+LESSON: the filing convention IS part of the data model. Keying on raw path
+structure encodes an assumption about how humans file that they do not hold.
+
+**F-V3-22 / api.py / the entire HTTP API returned 422** — SYMPTOM: every
+`POST /query` and `POST /explain` answered `422 Unprocessable Entity:
+{"loc": ["query", "q"], "msg": "Field required"}`. The API — the interface §53
+specifies and the UI layer is meant to talk to — did not work at all. ROOT
+CAUSE: `api.py` carried `from __future__ import annotations`, so the handler's
+`q: QueryIn` annotation was the STRING `"QueryIn"`; FastAPI resolves annotations
+with `get_type_hints()` against module globals, and `QueryIn` is defined inside
+`create_app()` (pydantic is imported lazily to keep fastapi optional, §52). The
+name was unresolvable, so FastAPI stopped treating the parameter as a request
+body and looked for a query-string parameter named `q` instead. FIX: drop the
+future import — `X | None` is valid at runtime on the target Python 3.11 — with
+the reason recorded at the import site so it is not "cleaned up" back in.
+RESULT: `test_api_query_returns_cited_sources_without_internals`,
+`test_api_source_endpoint_rejects_unknown_id`, `test_api_explain_bypasses_cache`
+— all three fail against the previous file.
+LESSON: this is precisely the defect the reviewer predicted when it failed
+TEST_COVERAGE for "api.py has no tests". A module with no tests is not
+low-risk because it is simple; it is unmeasured. Writing the tests found the
+API had never worked.
+
+**F-V3-23 / project isolation / multi-project questions were merged, not
+asked** — SYMPTOM: "what is the final claim amount certified?" retrieved
+RM50,569.30 (Dawson) and RM99,111.22 (Meridian), merged both into one evidence
+pack, and appended a verifier note asking the reader to check the answer did
+not mix projects. ROOT CAUSE: the verifier treated cross-project evidence as a
+quality flag rather than as an unanswerable question. A single figure with a
+caveat attached is a wrong-project answer (§60) wearing a disclaimer, and it
+puts one client's numbers in front of a question about another (§2). FIX: a
+new `AMBIGUOUS_PROJECT` verdict — the pipeline names the projects and the
+evidence in each, and asks which one is meant, without calling the LLM and
+without caching the clarification. An explicitly cross-project question
+("across all projects", "semua projek"), detected by the router on the original
+query text, still gets the merged answer it asked for. RESULT:
+`test_multi_project_question_asks_instead_of_merging` (fails before the fix),
+`test_explicit_cross_project_question_is_answered`,
+`test_ambiguous_project_reply_is_not_cached`.
+LESSON: when a question has two correct answers, returning one of them with a
+warning is worse than returning neither. Ask.
