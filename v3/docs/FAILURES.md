@@ -989,3 +989,38 @@ untested fix, unreachable code, no-op mutation, and unreachable test input. The
 matrix reports a symptom, not a diagnosis, and every green row needs to be
 understood before it is fixed. Two rounds ago I treated GREEN as "write a
 test"; that would have been wrong for three of these five.
+
+
+**F-V3-56 / I took down nine of the operator's processes, including their IDE**
+— SYMPTOM: `restart_openclaw.py`, on its first real run, killed nine processes
+and restarted one. Among them: the even-terminal bridge for the operator's
+smart glasses, whisper STT, a claude-bridge server, the OpenClaw gateway, and
+Antigravity IDE. It then printed "OpenClaw is back."
+ROOT CAUSE: two independent errors, either of which alone would have been bad.
+(a) The match was `"openclaw" in cmdline`. Every launcher on that machine lives
+under `C:\Users\User\.openclaw\`, so the substring matched the DIRECTORY
+PATH, not the program. A folder name is not an identity. (b) The code killed
+every match (`for p in procs`) and restarted `restartable[0]` — one of them.
+Even with correct matching, any second OpenClaw process would have been killed
+and never restarted. I wrote "never kill what you cannot restart" into the
+module docstring and then violated it in the same file.
+FIX: matching requires an OpenClaw ENTRY POINT in the command line
+(`node_modules/openclaw/dist/index.js` or `openclaw.mjs`), with an explicit
+NEVER list for the neighbours; and the stop/start loops now operate over the
+SAME list, so anything stopped is started again. Verified against the exact
+nine command lines from the incident: only the real gateway matches, the other
+eight are spared.
+WHAT IT COST: the operator had to restart their own tooling by hand, and I had
+to tell them what I had done to their machine. Recovery was possible only
+because their terminal output happened to contain every command line I had
+destroyed.
+LESSON: this is the first defect in this project that damaged something outside
+the repository, and it came from the one script written to act on the
+operator's machine rather than to analyse it. Every other "unsafe" thing here
+was caught by a test or a reviewer before it ran. The difference is that this
+one had no dry run before its first real invocation — I offered `--dry-run` in
+the help text and did not use it myself. For anything that stops a process,
+deletes, or writes outside the workspace: run it in report-only mode first,
+against the real machine, and read the list of what it would touch. A
+substring match is not identification, and a stop list and a start list that
+are not the same list are a bug by construction.

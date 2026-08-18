@@ -28,10 +28,45 @@ import sys
 import time
 from pathlib import Path
 
-MARKERS = ("openclaw", "open-claw")
+# Match the PROGRAM, not the folder.
+#
+# The first version matched any command line containing "openclaw". Every
+# launcher on the operator's machine lives in C:\Users\User\.openclaw\, so
+# that matched the PATH and killed nine unrelated processes — the even-terminal
+# bridge for their glasses, whisper STT, a claude-bridge server, and their IDE
+# — while restarting one. A substring match on a directory name is not
+# identification.
+#
+# These patterns name the actual OpenClaw entry points.
+PROGRAM_MARKERS = (
+    "node_modules/openclaw/dist/index.js",
+    "node_modules\\openclaw\\dist\\index.js",
+    "node_modules/openclaw/openclaw.mjs",
+    "node_modules\\openclaw\\openclaw.mjs",
+)
+
+# Never touch these, whatever else matches: they are other programs that merely
+# live in, or refer to, the .openclaw directory.
+NEVER = ("even-terminal", "whisper", "claude-bridge", "antigravity",
+         "restart_openclaw", "powershell", "conhost.exe")
 DEFAULT_ENTRY = (Path(os.path.expanduser("~")) / "AppData" / "Roaming" / "npm"
                  / "node_modules" / "openclaw" / "openclaw.mjs")
 LOGDIR = Path(os.path.expanduser("~")) / ".openclaw"
+
+
+def _is_openclaw(cmdline: str) -> bool:
+    """Is this the OpenClaw program itself?
+
+    Requires the command line to invoke an OpenClaw ENTRY POINT, and rejects
+    anything on the NEVER list outright. A process is only a restart candidate
+    if we can point at the file it is executing.
+    """
+    low = (cmdline or "").lower().replace("\\\\", "\\")
+    if not low:
+        return False
+    if any(bad in low for bad in NEVER):
+        return False
+    return any(m.lower() in low for m in PROGRAM_MARKERS)
 
 
 def _powershell(script: str) -> str:
@@ -59,7 +94,7 @@ def find_processes() -> list[dict]:
             if not line:
                 continue
             pid, _, cmd = line.partition(" ")
-            if any(m in cmd.lower() for m in MARKERS) and "restart_openclaw" not in cmd:
+            if _is_openclaw(cmd):
                 found.append({"pid": int(pid), "cmdline": cmd.strip(), "cwd": ""})
         return found
 
@@ -80,8 +115,8 @@ def find_processes() -> list[dict]:
     found = []
     for d in data:
         cmd = (d.get("CommandLine") or "").strip()
-        if "restart_openclaw" in cmd:
-            continue                      # never count ourselves
+        if not _is_openclaw(cmd):
+            continue
         found.append({"pid": int(d["ProcessId"]), "cmdline": cmd,
                       "exe": d.get("ExecutablePath") or ""})
     return found
@@ -160,14 +195,21 @@ def main() -> int:
         print("Restart it the way you normally do instead.")
         return 4
 
-    target = restartable[0]
-    print(f"\nWill restart PID {target['pid']} using its own command line:")
-    print(f"  {target['cmdline']}")
+    print(f"\nWill restart {len(restartable)} process(es), each with its own "
+          "command line:")
+    for p in restartable:
+        print(f"  PID {p['pid']}: {p['cmdline'][:140]}")
+    skipped = [p for p in procs if p not in restartable]
+    if skipped:
+        print(f"Leaving {len(skipped)} other process(es) alone.")
     if args.dry_run:
         print("\n--dry-run: nothing stopped or started.")
         return 0
 
-    for p in procs:
+    # Stop and restart the SAME set. The first version killed every match and
+    # started one of them, which is how a restart became an outage.
+    stopped: list[dict] = []
+    for p in restartable:
         print(f"Stopping PID {p['pid']}…")
         if os.name == "nt":
             subprocess.run(["taskkill", "/PID", str(p["pid"]), "/T", "/F"],
@@ -177,10 +219,12 @@ def main() -> int:
                 os.kill(p["pid"], 15)
             except OSError as e:
                 print(f"  ({e})")
+        stopped.append(p)
     time.sleep(3)
 
-    print("Starting again…")
-    _spawn(target["cmdline"])
+    for p in stopped:
+        print(f"Starting again: {p['cmdline'][:120]}")
+        _spawn(p["cmdline"])
     for _ in range(10):
         time.sleep(2)
         now = find_processes()
