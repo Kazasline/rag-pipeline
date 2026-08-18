@@ -45,7 +45,10 @@ Dia akan cuba 2,000 fail je, lepas tu bagitahu:
 Bahagi dengan 60 = minit. Kalau nampak munasabah, baru run penuh nanti.
 **Ini anggaran, bukan ukuran sebenar** — fail besar lagi lambat dari fail kecil.
 
-Hantar output tu kat aku.
+**SUDAH DIUKUR (2026-08-17):** 74.2 fail/saat, 662,356 fail →
+**anggaran 2 jam 29 minit** untuk run penuh. Sekali je perlu, boleh biar
+jalan masa tidur. (Kadar tu diukur betul; jumlah tu anggaran — fail besar
+lagi lambat.)
 
 ---
 
@@ -112,17 +115,19 @@ dah sambung ke WhatsApp (OpenClaw). V3 pun boleh.
 pip install mcp
 ```
 
-2. Buka `C:\Users\User\.openclaw\openclaw.json`, cari bahagian
-   `mcp.servers`, tambah satu entry:
+2. Daftar V3 dalam OpenClaw — **jangan edit fail tu sendiri**, guna skrip ni:
 
-```json
-"alirag": {
-  "command": "python",
-  "args": ["-m", "alirag.mcp_server"],
-  "cwd": "C:\\rag-pipeline\\v3",
-  "env": { "ALIRAG_CONFIG": "C:\\rag-pipeline\\v3\\config.kazasline.yaml" }
-}
 ```
+python C:\rag-pipeline\v3\tools\install_openclaw.py
+```
+
+Skrip tu akan:
+* backup `openclaw.json` dulu (cetak lokasi backup)
+* kekalkan SEMUA server sedia ada (`file_rag` V1 kau tak diusik)
+* tolak buat apa-apa kalau fail tu JSON rosak
+* sahkan hasilnya boleh dibaca sebelum simpan
+
+Nak tengok dulu tanpa ubah apa-apa: tambah `--dry-run` di hujung.
 
 3. Restart OpenClaw.
 

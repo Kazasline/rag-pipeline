@@ -148,14 +148,26 @@ index also contains the wrong corpus (AI tooling directories rather than
 project documents), so any score from it would be meaningless.
 
 
-## §84 snapshot cost — NOT MEASURED
+## §84 snapshot cost — sampled on the target machine (2026-08-17)
 
-The round-7 reviewer noted this gap and it is real: DATA_SAFETY acceptance
-depends on `safety snapshot` completing over 662,244 files with content
-hashing, and that run has never been performed or timed. No estimate appears
-here, because any figure I could produce would come from Linux hardware that
-is not the target machine, and §79 does not allow an extrapolation to be
-quoted as a measurement.
+| | |
+|---|---|
+| Files under the source roots | **662,356** |
+| Sample size | 2,000 files |
+| Sample elapsed | 26.94 s |
+| **Rate** | **74.2 files/second** (measured) |
+| **Estimated full run** | **8,921.7 s ≈ 2 h 29 min** (extrapolated) |
+
+The RATE is measured on the target machine. The TOTAL is an extrapolation from
+it, and the two are not the same claim: hashing cost scales with file size, so
+if the 2,000 sampled files were smaller than average the real run will take
+longer. The figure is here to decide with, not to quote as a result — replace
+it once a full run has actually completed.
+
+Practical reading: this is a once-per-acceptance-run cost, not a per-query
+one, and it can run unattended. It is not a reason to weaken the check.
+
+Reproduce with `python -m alirag.cli safety snapshot --sample 2000`.
 
 To measure it on the machine that matters, before committing to a full run:
 
