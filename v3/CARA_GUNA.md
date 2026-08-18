@@ -99,6 +99,63 @@ Hantar output kat aku. Baru kita tahu:
 
 ---
 
+## CARA SENANG — buat semua ni dari WhatsApp
+
+Kalau taip command satu-satu kat cmd tu menyusahkan, ada jalan lain. V1 kau
+dah sambung ke WhatsApp (OpenClaw). V3 pun boleh.
+
+### Pasang sekali je
+
+1. Pastikan `mcp` dipasang:
+
+```
+pip install mcp
+```
+
+2. Buka `C:\Users\User\.openclaw\openclaw.json`, cari bahagian
+   `mcp.servers`, tambah satu entry:
+
+```json
+"alirag": {
+  "command": "python",
+  "args": ["-m", "alirag.mcp_server"],
+  "cwd": "C:\\rag-pipeline\\v3",
+  "env": { "ALIRAG_CONFIG": "C:\\rag-pipeline\\v3\\config.kazasline.yaml" }
+}
+```
+
+3. Restart OpenClaw.
+
+### Lepas tu, guna macam biasa
+
+WhatsApp kau:
+
+> **Kau:** berapa claim amount yang certified untuk Selgate?
+>
+> **Ali:** RM97,923.07 …
+> Sumber: AVC 2 SCI CERT PAYMENT 11R01.pdf p.17 — projek: SITE CONCEPT
+> *Betul tak? Balas: betul / salah <nama fail yang sepatutnya>*
+>
+> **Kau:** betul
+>
+> **Ali:** Direkod. Jumlah soalan ujian: 1. Lagi 4 soalan sebelum boleh run ujian.
+
+**Itu sahaja.** Setiap kali kau balas "betul" atau "salah", satu soalan ujian
+terbina sendiri — soalan BETUL yang kau memang tanya, bukan soalan auta. Lepas
+5 soalan, baru boleh run ujian ketepatan.
+
+Ini sama je dengan isi Excel tu, cuma kau buat masa kau memang tengah guna
+sistem, masa kau memang tahu jawapan tu betul ke tak.
+
+### Satu benda kena tahu (privasi)
+
+Hantar jawapan ke WhatsApp bermakna teks jawapan + nama fail lalu server Meta.
+V1 kau memang dah buat macam tu (hantar gambar page). Carian, model dan index
+semua kekal dalam PC kau — cuma balasan je keluar. Ini keputusan kau, tapi aku
+sebut sebab ia nyata.
+
+---
+
 ## Kenapa sistem ni degil pasal `reviewed: yes`
 
 Sistem ni memang sengaja **tolak** untuk bagi markah kalau soalan tak disemak

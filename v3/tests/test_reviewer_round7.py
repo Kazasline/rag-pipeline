@@ -487,3 +487,51 @@ def test_csv_question_sheet_round_trips_and_keeps_every_gate(ingested,
     with pytest.raises(BenchmarkError) as e:
         _load_questions(sheet)
     assert "more than once" in str(e.value)
+
+
+# ------------------------------------------------------------------ chat path
+def test_marking_an_answer_over_chat_builds_a_reviewed_benchmark_row(ingested,
+                                                                     monkeypatch):
+    """The §43 review step was a spreadsheet, which is why it never happened.
+    Marking an answer in chat is the same review — a human judging an answer
+    they saw, to a question they actually asked — and it must produce a row the
+    benchmark harness accepts, with every gate still applied."""
+    import csv as _csv
+
+    from alirag import mcp_server
+    cfg, _ = ingested
+    monkeypatch.setattr(mcp_server, "_cfg", cfg)
+    monkeypatch.setattr(mcp_server, "_engine", None)
+    mcp_server._last.clear()
+
+    # nothing to mark yet
+    assert "Tiada jawapan" in mcp_server.mark_answer(True)
+
+    out = mcp_server.answer_question("find LAI-003")
+    assert "LAI-003" in out
+    assert "Betul tak?" in out, "the operator must be asked, or no review happens"
+
+    msg = mcp_server.mark_answer(True)
+    assert "Direkod" in msg
+
+    path = Path(cfg.dir("benchmark")) / "questions.csv"
+    rows = list(_csv.DictReader(open(path, encoding="utf-8-sig")))
+    assert len(rows) == 1
+    assert rows[0]["question"] == "find LAI-003"
+    assert rows[0]["reviewed"] == "yes"
+    assert "LAI-003" in rows[0]["expected_file"]
+
+
+def test_a_wrong_answer_needs_the_right_file_named(ingested, monkeypatch):
+    """'salah' on its own records nothing: without the correct document there
+    is no expectation to score against, and inventing one would fabricate the
+    review."""
+    from alirag import mcp_server
+    cfg, _ = ingested
+    monkeypatch.setattr(mcp_server, "_cfg", cfg)
+    monkeypatch.setattr(mcp_server, "_engine", None)
+    mcp_server._last.clear()
+    mcp_server.answer_question("find LAI-003")
+    msg = mcp_server.mark_answer(False)
+    assert "sepatutnya" in msg.lower()
+    assert not (Path(cfg.dir("benchmark")) / "questions.csv").exists()
