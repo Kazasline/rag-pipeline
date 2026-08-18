@@ -367,8 +367,22 @@ MUTATIONS: list[tuple[str, str, str, str, str]] = [
 ]
 
 
-def run(cmd: list[str], cwd: Path) -> tuple[int, str]:
-    p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+# A mutation can make the suite HANG rather than fail — an infinite loop, or a
+# wait that never returns. Without a timeout the whole matrix freezes on it and
+# never completes, which is what happened on the first 71-mutation run: it sat
+# on one mutation for over an hour reporting nothing. A hang is its own result:
+# the fix may be guarded, but by a test that stops responding rather than one
+# that reports.
+PER_MUTATION_TIMEOUT = 300
+
+
+def run(cmd: list[str], cwd: Path,
+        timeout: int = PER_MUTATION_TIMEOUT) -> tuple[int, str]:
+    try:
+        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
+                           timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return 124, f"TIMEOUT after {timeout}s"
     return p.returncode, (p.stdout + p.stderr)[-4000:]
 
 
@@ -417,11 +431,14 @@ def main() -> int:
 
             tail = out.strip().splitlines()[-1] if out.strip() else ""
             red = code != 0
-            status = "RED (guarded)" if red else "GREEN (UNGUARDED)"
+            status = ("HUNG (suite never finished)" if code == 124 else
+                      "RED (guarded)" if red else "GREEN (UNGUARDED)")
             if not red:
                 unguarded.append(mid)
             print(f"  {'ok ' if red else 'XX '} {mid:<10} {status:<18} {desc}")
-            results.append({"id": mid, "status": "RED" if red else "GREEN",
+            results.append({"id": mid,
+                            "status": ("HUNG" if code == 124 else
+                                       "RED" if red else "GREEN"),
                             "desc": desc, "tail": tail})
 
     print()
