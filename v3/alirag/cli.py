@@ -87,6 +87,11 @@ def main(argv: list[str] | None = None):
     sub.add_parser("review")
     p = sub.add_parser("safety")
     p.add_argument("action", choices=["snapshot", "verify"])
+    p.add_argument("--sample", type=int, metavar="N",
+                   help="snapshot only N files and report throughput, so the "
+                        "cost of a full run can be estimated on THIS machine "
+                        "before committing to it (§88). Writes to a separate "
+                        "file; never overwrites the real snapshot.")
     sub.add_parser("restart-test")
     sub.add_parser("backup")
     sub.add_parser("serve")
@@ -219,8 +224,35 @@ def main(argv: list[str] | None = None):
                   flush=True)
         snap = cfg.dir("reports") / "safety_snapshot.jsonl"
         if args.action == "snapshot":
+            if args.sample:
+                # §88: the cost of hashing every file on a terabyte drive has
+                # never been measured, and DATA_SAFETY acceptance depends on
+                # that run completing. Measure a sample HERE rather than
+                # publishing an estimate derived from different hardware.
+                sample_path = cfg.dir("reports") / "safety_snapshot.sample.jsonl"
+                t0 = time.time()
+                n = guard.snapshot(sample_path, max_files=args.sample)
+                dt = max(time.time() - t0, 1e-6)
+                total = sum(1 for _ in guard._walk_sources())
+                rate = n / dt
+                _print({
+                    "sample": str(sample_path), "files_sampled": n,
+                    "elapsed_s": round(dt, 2),
+                    "files_per_second": round(rate, 1),
+                    "files_under_source_roots": total,
+                    "estimated_full_run_s": round(total / rate, 1) if rate else None,
+                    "note": ("EXTRAPOLATION from a sample on this machine, not "
+                             "a measured full run. Hashing cost varies with "
+                             "file size, so a sample biased toward small files "
+                             "will understate it. This is here so the operator "
+                             "can decide before starting, not so the estimate "
+                             "can be quoted as a result (§79/§88)."),
+                })
+                return
+            t0 = time.time()
             n = guard.snapshot(snap)
             _print({"snapshot": str(snap), "files": n,
+                    "elapsed_s": round(time.time() - t0, 1),
                     "excluded_dirs": list(guard.excluded_dirs)})
         else:
             result = guard.verify_snapshot(snap)

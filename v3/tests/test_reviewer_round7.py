@@ -413,3 +413,30 @@ def test_exact_id_lookup_applies_a_sql_row_limit(tmp_path: Path):
     assert limits and all(0 < lim <= 3 * 8 for lim in limits), limits
     idx.con = real.__self__
     idx.close()
+
+
+# ------------------------------------------------------------------ §88 cost
+def test_snapshot_sample_reports_throughput_without_touching_the_real_snapshot(
+        tmp_path: Path, capsys):
+    """§88 gap named by the round-7 reviewer: the cost of hashing 662,244 files
+    has never been measured, and DATA_SAFETY acceptance depends on that run
+    completing. `--sample` measures it on the operator's own machine and labels
+    the result an extrapolation."""
+    from alirag.cli import main
+    src = tmp_path / "src"
+    src.mkdir()
+    for i in range(12):
+        (src / f"f{i}.txt").write_text("x" * 100, encoding="utf-8")
+    cfg = Config(workspace=str(tmp_path / "ws"), source_roots=[str(src)],
+                 embed=EmbedConfig(provider="hash", dim=256))
+    p = cfg.dir("config") / "config.yaml"
+    cfg.save(p)
+
+    main(["--config", str(p), "safety", "snapshot", "--sample", "5"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["files_sampled"] == 5
+    assert out["files_under_source_roots"] == 12
+    assert out["files_per_second"] > 0
+    assert "EXTRAPOLATION" in out["note"]
+    # the real snapshot must not have been created or clobbered by a sample
+    assert not (cfg.dir("reports") / "safety_snapshot.jsonl").exists()

@@ -146,3 +146,28 @@ Recall@K, MRR, citation accuracy and wrong-project rate — all require the
 human-reviewed question set (`bench make` → review → `bench run`). The pilot
 index also contains the wrong corpus (AI tooling directories rather than
 project documents), so any score from it would be meaningless.
+
+
+## §84 snapshot cost — NOT MEASURED
+
+The round-7 reviewer noted this gap and it is real: DATA_SAFETY acceptance
+depends on `safety snapshot` completing over 662,244 files with content
+hashing, and that run has never been performed or timed. No estimate appears
+here, because any figure I could produce would come from Linux hardware that
+is not the target machine, and §79 does not allow an extrapolation to be
+quoted as a measurement.
+
+To measure it on the machine that matters, before committing to a full run:
+
+```
+python -m alirag.cli safety snapshot --sample 2000
+```
+
+That hashes 2,000 files, reports `files_per_second` and an
+`estimated_full_run_s` for the real file count, writes to a SEPARATE sample
+file (it never overwrites the working snapshot), and labels its own output an
+extrapolation. Hashing cost scales with file size, so a sample that happens to
+land on small files will understate the total — treat the number as a decision
+aid, not a result.
+
+The figure belongs in this section once the full run has actually happened.
