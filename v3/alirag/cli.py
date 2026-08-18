@@ -81,6 +81,9 @@ def main(argv: list[str] | None = None):
     p.add_argument("--mode")
     p = sub.add_parser("bench")
     p.add_argument("action", choices=["make", "run", "compare"])
+    p.add_argument("--csv", action="store_true",
+                   help="write the question template as a CSV you can edit in "
+                        "Excel instead of JSONL (recommended)")
     p.add_argument("--questions")
     p.add_argument("--label", default="full")
     p.add_argument("--llm", action="store_true")
@@ -188,9 +191,39 @@ def main(argv: list[str] | None = None):
         qpath = Path(args.questions) if args.questions else \
             cfg.dir("benchmark") / "questions.jsonl"
         if args.action == "make":
-            out = bench.make_template(cfg)
-            print(f"[bench] draft written to {out} — REVIEW EVERY QUESTION, "
-                  f"then save as {qpath}")
+            if args.csv:
+                out = bench.make_csv_template(cfg)
+                print(f"""
+[bench] Question sheet written to:
+    {out}
+
+Open it in Excel (double-click). You will see one row per document, with the
+document's name already filled in and a snippet of its text so you can tell
+what it is.
+
+For each row you want to use:
+  1. `question`      - type a REAL question in your own words, one you would
+                       actually ask, whose answer is inside that document.
+  2. `expected_file` - already filled in. Change it only if a DIFFERENT file
+                       is the one that should answer your question.
+  3. `project`       - already filled in; correct it if it is wrong.
+  4. `reviewed`      - change `no` to `yes` once you are happy with the row.
+
+Rows you leave alone are ignored. You need at least 5 rows set to `yes`.
+Delete the rest if you like. Save as CSV (keep the format when Excel asks).
+
+Then run:
+    python -m alirag.cli bench run --questions "{out}" --label fast
+
+Why you have to do this and not me: the score is meaningless unless the
+questions are real and the expected answers are correct, and only you know
+your documents. A question set I invented would produce a number that looks
+like a measurement and is not one.
+""".rstrip(), flush=True)
+            else:
+                out = bench.make_template(cfg)
+                print(f"[bench] draft written to {out} — REVIEW EVERY QUESTION, "
+                      f"then save as {qpath}")
         elif args.action == "run":
             _print(bench.run_retrieval_bench(cfg, qpath, use_llm=args.llm,
                                              label=args.label))

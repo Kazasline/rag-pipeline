@@ -125,7 +125,82 @@ def _validate_question(rec: dict, idx: int) -> None:
 MIN_DISTINCT_QUESTIONS = 5
 
 
+CSV_COLUMNS = ["question", "expected_file", "project", "mode", "reviewed",
+               "expected_page", "_file_hint", "_snippet_hint"]
+
+
+def make_csv_template(cfg: Config, out_path: Path | None = None,
+                      n: int = 30) -> Path:
+    """Same as make_template, but as a CSV the operator can edit in Excel.
+
+    The JSONL format is correct for the harness and hostile to a human: one
+    long line per question, quotes and braces that break if a spreadsheet
+    touches them. The operator who has to write these questions is the person
+    who knows the documents, not the person who knows JSON — so the file they
+    edit should open in Excel by double-clicking it.
+    """
+    import csv as _csv
+
+    from .manifest import Manifest
+    mf = Manifest(cfg.manifest_db)
+    rows = mf.con.execute(
+        "SELECT f.filename, f.project, f.document_type, c.page, c.text "
+        "FROM files f JOIN chunks c ON c.file_id=f.file_id "
+        "WHERE f.index_status='INDEXED' GROUP BY f.file_id "
+        "ORDER BY RANDOM() LIMIT ?", (n,)).fetchall()
+    mf.close()
+    if not rows:
+        raise BenchmarkError("no indexed files — ingest before building a benchmark")
+
+    out_path = Path(out_path or cfg.dir("benchmark") / "questions.csv")
+    with open(out_path, "w", encoding="utf-8-sig", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(CSV_COLUMNS)
+        for r in rows:
+            snippet = " ".join((r["text"] or "")[:160].split())
+            w.writerow(["", r["filename"], r["project"] or "", "", "no",
+                        r["page"] or "", r["filename"], snippet])
+    return out_path
+
+
+def _load_csv_questions(path: Path) -> list[dict]:
+    """Read the Excel-editable CSV back into the harness format."""
+    import csv as _csv
+
+    qs = []
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        for i, row in enumerate(_csv.DictReader(f), 2):   # row 1 is the header
+            q = (row.get("question") or "").strip()
+            reviewed = (row.get("reviewed") or "").strip().lower()
+            if not q and reviewed in ("", "no"):
+                continue          # an untouched template row is skipped, not failed
+            rec = {
+                "q": q,
+                "expect_file": (row.get("expected_file") or "").strip(),
+                "project": (row.get("project") or "").strip(),
+                "mode": (row.get("mode") or "").strip().upper(),
+                "reviewed": reviewed in ("yes", "y", "true", "1", "ya"),
+                "kind": "semantic",
+            }
+            page = (row.get("expected_page") or "").strip()
+            if page.isdigit():
+                rec["expect_page"] = int(page)
+            _validate_question(rec, i)
+            qs.append(rec)
+    if not qs:
+        raise BenchmarkError(
+            f"no reviewed questions in {path}. Fill in the `question` column "
+            "and set `reviewed` to yes for each row you have checked — a row "
+            "left as the template is skipped, and a file with none of them "
+            "cannot be scored.")
+    return qs
+
+
 def _load_questions(path: Path) -> list[dict]:
+    if str(path).lower().endswith(".csv"):
+        qs = _load_csv_questions(Path(path))
+        _reject_duplicates(qs, path)
+        return qs
     qs = []
     with open(path, encoding="utf-8") as f:
         for i, line in enumerate(f, 1):
@@ -142,13 +217,15 @@ def _load_questions(path: Path) -> list[dict]:
             f"no validated questions in {path} — a benchmark cannot be scored "
             "from an empty or unreviewed set (§43)")
 
-    # Round-2 reviewer N5: 25 copies of one question satisfied every honesty
-    # gate — n>=20 for meaningful percentiles, recall 1.0, wrong-project 0.0.
-    # Normalize before comparing. Round-3 reviewer R3-5: the key was
-    # `" ".join(q.lower().split())`, so 25 copies of one question with rotating
-    # trailing punctuation were accepted as 25 distinct questions — clearing
-    # MIN_DISTINCT_QUESTIONS, MIN_BENCH_QUESTIONS and percentiles_meaningful,
-    # i.e. every gate this check exists to hold.
+    _reject_duplicates(qs, path)
+    return qs
+
+
+def _reject_duplicates(qs: list[dict], path) -> None:
+    """Round-2 reviewer N5: 25 copies of one question satisfied every honesty
+    gate. Round-3 R3-5: punctuation defeated the first version of this check.
+    Applies to BOTH file formats — a gate that only guards one of them is not
+    a gate."""
     def _norm(q: str) -> str:
         return " ".join(re.sub(r"[^\w\s]", " ", q.lower()).split())
 
@@ -168,7 +245,6 @@ def _load_questions(path: Path) -> list[dict]:
             f"only {len(qs)} distinct question(s) in {path}; at least "
             f"{MIN_DISTINCT_QUESTIONS} are needed before any score is "
             "meaningful (§43/§44).")
-    return qs
 
 
 def run_retrieval_bench(cfg: Config, questions_path: Path,

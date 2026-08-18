@@ -440,3 +440,50 @@ def test_snapshot_sample_reports_throughput_without_touching_the_real_snapshot(
     assert "EXTRAPOLATION" in out["note"]
     # the real snapshot must not have been created or clobbered by a sample
     assert not (cfg.dir("reports") / "safety_snapshot.jsonl").exists()
+
+
+# ------------------------------------------------------------------ CSV path
+def test_csv_question_sheet_round_trips_and_keeps_every_gate(ingested,
+                                                             tmp_path: Path):
+    """The CSV exists so the person who knows the documents can write the
+    questions in Excel. It must not become a way around the honesty gates —
+    the same validation runs on both formats."""
+    import csv
+
+    from alirag.bench import (BenchmarkError, _load_questions,
+                              make_csv_template, run_retrieval_bench)
+    cfg, _ = ingested
+    sheet = make_csv_template(cfg, tmp_path / "q.csv", n=5)
+    rows = list(csv.DictReader(open(sheet, encoding="utf-8-sig")))
+    assert rows and rows[0]["reviewed"] == "no"
+    assert rows[0]["expected_file"], "the document name must be pre-filled"
+
+    # untouched template -> refused, and the message says what to do
+    with pytest.raises(BenchmarkError) as e:
+        _load_questions(sheet)
+    assert "reviewed" in str(e.value).lower()
+
+    # a filled-in sheet scores
+    from conftest import BENCH_QUESTIONS
+    with open(sheet, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["question", "expected_file", "project", "mode", "reviewed",
+                    "expected_page", "_file_hint", "_snippet_hint"])
+        for q in BENCH_QUESTIONS:
+            w.writerow([q["q"], q["expect_file"], q["project"], "", "yes",
+                        "", "", ""])
+    rep = run_retrieval_bench(cfg, sheet, label="adhoc", use_llm=False)
+    assert rep["questions"] == len(BENCH_QUESTIONS)
+
+    # ...and duplicates are still refused through this path
+    with open(sheet, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["question", "expected_file", "project", "mode", "reviewed",
+                    "expected_page", "_file_hint", "_snippet_hint"])
+        for i in range(6):
+            w.writerow(["which document is the LAI-003 turf instruction?" + "." * i,
+                        "LAI-003 turf instruction.txt", "Dawson", "", "yes",
+                        "", "", ""])
+    with pytest.raises(BenchmarkError) as e:
+        _load_questions(sheet)
+    assert "more than once" in str(e.value)
