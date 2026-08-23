@@ -38,3 +38,6 @@ desktop.ini
 # ── Temporary files ───────────────────────────────────────────────────────────
 _reply.mp3
 *.tmp
+
+# ── Local agent/MCP wiring (absolute machine paths) ────────────────────────
+.mcp.json
