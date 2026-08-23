@@ -134,6 +134,22 @@ schtasks /Create /TN "RAG-Nightly-Index" /TR "powershell -File C:\path\to\nightl
 | `demo-status.py` | Show index stats (chunk count, Docling coverage, vector count) |
 | `demo-search.py` | CLI semantic search with ranked results display |
 | `demo-docling.py` | Live Docling parse demo with GPU timing |
+| `tools/setup-jcode.ps1` | One-shot installer for the [jcode](https://github.com/1jehuang/jcode) agent harness on Windows |
+
+## Using this repo with the jcode agent harness
+
+[jcode](https://github.com/1jehuang/jcode) is a terminal coding-agent harness that runs on the AI
+subscriptions you already pay for (Claude, ChatGPT/Codex, Gemini, Copilot). `tools/setup-jcode.ps1`
+installs it, verifies the download, and hands over at the browser login:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\setup-jcode.ps1 -WireRagMcp
+```
+
+`-WireRagMcp` writes a `.mcp.json` pointing at `rag_mcp.py`, so the `file_rag` tool is available
+inside jcode sessions in this repo (jcode reads Claude Code's `.mcp.json` format natively).
+
+Full walkthrough, options, and troubleshooting: [`docs/jcode-setup.md`](docs/jcode-setup.md).
 
 ## Index files (never commit)
 
