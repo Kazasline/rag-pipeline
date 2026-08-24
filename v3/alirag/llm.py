@@ -1,0 +1,312 @@
+r"""Local LLM client (spec §11, §33–§34).
+
+Talks to any OpenAI-compatible /v1/chat/completions endpoint — LM Studio,
+llama.cpp server, vLLM, SGLang and Ollama all expose one — so the backend can
+be swapped by config after the Phase 0/§33 benchmark, without code changes.
+
+Streaming is always used so TTFT is measured for real: ttft = first content
+token wall-clock, tokens/sec from the stream tail (§10, §42).
+
+Mode -> reasoning mapping (§34) is backend-dependent; `reasoning_param_style`
+in config selects the wire format and MUST be verified against the actual
+backend's docs on the target machine (cloud parameter names do not transfer
+to local servers automatically).
+"""
+
+from __future__ import annotations
+
+import json
+import time
+import urllib.error
+import urllib.request
+
+
+class LLMError(RuntimeError):
+    pass
+
+
+MODE_EFFORT = {"FAST": "low", "DEEP": "medium", "FULLSWING": "high"}
+
+
+def _keep_alive_value(raw: str | int):
+    """Normalise keep_alive for Ollama.
+
+    F-V3-14: sending the string "-1" produced HTTP 400. Ollama accepts either a
+    NUMBER of seconds (-1 meaning indefinitely) or a duration STRING with a unit
+    ("10m", "24h"); a bare "-1" is neither, so it fails to parse. Numeric-looking
+    values are therefore sent as numbers and everything else passes through as a
+    duration string.
+    """
+    if isinstance(raw, (int, float)):
+        return raw
+    text = str(raw).strip()
+    try:
+        return int(text)
+    except ValueError:
+        return text          # e.g. "10m", "24h" — a valid duration string
+
+
+def _http_error_detail(e) -> str:
+    """Include the server's explanation of a rejected request.
+
+    A 400 means the request was received and refused, so reporting it as
+    "unreachable" hides the reason (F-V3-14). The response body usually names
+    the offending field.
+    """
+    try:
+        body = e.read().decode("utf-8", errors="replace")[:400]
+    except Exception:  # noqa: BLE001 — diagnostics must never raise
+        body = ""
+    return f"HTTP {e.code} {e.reason}" + (f" — {body}" if body else "")
+
+
+def _empty_reason(text: str, reasoning_tokens: int, finish_reason: str | None,
+                  frames_seen: int = -1, frames_unparsed: int = 0) -> str | None:
+    """Explain an empty answer instead of letting it pass as a real one.
+
+    The common case on a reasoning model is a token budget consumed entirely by
+    chain-of-thought: the stream ends with plenty of reasoning and zero content.
+    Saying so is what lets the caller raise the budget or disable thinking,
+    rather than silently returning an empty string as if it were an answer.
+    """
+    if text:
+        return None
+    # Distinguish a CLIENT-side stream-parsing failure from a model that said
+    # nothing. Silently skipping malformed frames and then reporting "model
+    # returned no content" blames the backend for our own inability to read
+    # its output — which sends debugging in exactly the wrong direction.
+    if frames_seen == 0:
+        return ("no stream frames received from the backend — the request "
+                "returned an empty body")
+    if frames_unparsed and frames_unparsed == frames_seen:
+        return (f"could not parse ANY of the {frames_seen} stream frames the "
+                "backend sent — this is a client-side parsing failure, not a "
+                "model failure; the backend's stream format may have changed")
+    if frames_unparsed:
+        return (f"{frames_unparsed} of {frames_seen} stream frames were "
+                "unparseable and no answer content was recovered — suspect a "
+                "client/backend stream-format mismatch")
+    if reasoning_tokens and finish_reason == "length":
+        return (f"model produced {reasoning_tokens} reasoning tokens and hit the "
+                "token limit before writing an answer — raise max_answer_tokens "
+                "for this mode, or disable thinking")
+    if reasoning_tokens:
+        return (f"model produced {reasoning_tokens} reasoning tokens but no answer "
+                f"content (finish_reason={finish_reason})")
+    if finish_reason == "length":
+        return "token limit reached before any answer content was produced"
+    return f"model returned no content (finish_reason={finish_reason})"
+
+
+def _mode_params(mode: str, style: str) -> dict:
+    """Extra request params implementing FAST=no/min thinking,
+    DEEP=medium, FULLSWING=high (§34)."""
+    if style == "openai_effort":
+        return {"reasoning_effort": MODE_EFFORT[mode]}
+    if style == "qwen_enable_thinking":
+        return {"chat_template_kwargs": {"enable_thinking": mode != "FAST"}}
+    if style == "ollama_think":
+        return {"think": mode != "FAST"}
+    return {}
+
+
+class LLMClient:
+    def __init__(self, cfg):
+        self.cfg = cfg.llm
+        self.max_tokens = {"FAST": self.cfg.max_answer_tokens_fast,
+                           "DEEP": self.cfg.max_answer_tokens_deep,
+                           "FULLSWING": self.cfg.max_answer_tokens_fullswing}
+
+    def chat(self, system: str, user: str, mode: str = "FAST") -> dict:
+        if self.cfg.api_style == "ollama_native":
+            return self._chat_ollama_native(system, user, mode)
+        return self._chat_openai(system, user, mode)
+
+    # ------------------------------------------------------------ Ollama native
+    def _chat_ollama_native(self, system: str, user: str, mode: str) -> dict:
+        """Ollama's own /api/chat.
+
+        F-V3-11: the OpenAI-compatible /v1 endpoint silently drops non-standard
+        fields, so `think: false` never reached the model and every FAST query
+        paid for a full chain-of-thought. Only the native API honours it. Its
+        stream is newline-delimited JSON (not SSE) and carries thinking in
+        `message.thinking`, separate from `message.content`.
+        """
+        base = self.cfg.base_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3].rstrip("/")
+        body = {
+            "model": self.cfg.model_for(mode),
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "stream": True,
+            "think": mode != "FAST",
+            # Keep weights resident between queries. Measured: with the model
+            # unloading, TTFT was 20.5s while decoding took 918ms — the wait was
+            # almost entirely load time (F-V3-13). Sending it per request is
+            # more reliable than OLLAMA_KEEP_ALIVE, which depends on the service
+            # environment rather than the caller's.
+            "keep_alive": _keep_alive_value(self.cfg.keep_alive),
+            "options": {"num_predict": self.max_tokens.get(mode, 1024),
+                        "temperature": 0.2},
+        }
+        req = urllib.request.Request(
+            base + "/api/chat", data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"})
+        t0 = time.perf_counter()
+        ttft = None
+        parts: list[str] = []
+        ntok = reasoning_tokens = 0
+        frames_seen = frames_unparsed = 0
+        finish_reason = None
+        try:
+            with urllib.request.urlopen(req, timeout=self.cfg.timeout_s) as r:
+                for raw in r:
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    frames_seen += 1
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        frames_unparsed += 1
+                        continue
+                    if rec.get("error"):
+                        raise LLMError(f"Ollama error: {rec['error']}")
+                    msg = rec.get("message") or {}
+                    if msg.get("thinking"):
+                        reasoning_tokens += 1
+                    content = msg.get("content")
+                    if content:
+                        if ttft is None:
+                            ttft = time.perf_counter() - t0
+                        parts.append(content)
+                        ntok += 1
+                    if rec.get("done"):
+                        finish_reason = rec.get("done_reason") or "stop"
+                        break
+        except urllib.error.HTTPError as e:
+            raise LLMError(
+                f"Ollama refused the request at {base}/api/chat: "
+                f"{_http_error_detail(e)}") from e
+        except OSError as e:
+            raise LLMError(f"Ollama unreachable at {base}: {e}") from e
+        total = time.perf_counter() - t0
+        gen = total - (ttft or 0)
+        text = "".join(parts).strip()
+        return {"text": text,
+                "ttft_ms": round((ttft or 0) * 1000, 1),
+                "gen_ms": round(gen * 1000, 1),
+                # NOTE: these count STREAM DELTAS, not tokens. A delta usually
+                # carries one token but the backend makes no such guarantee, so
+                # the derived rate is reported as deltas/sec under an honest
+                # name rather than as tokens/sec.
+                "content_deltas": ntok,
+                "tokens": ntok,               # retained for compatibility
+                "reasoning_deltas": reasoning_tokens,
+                "reasoning_tokens": reasoning_tokens,
+                "finish_reason": finish_reason,
+                "total_ms": round(total * 1000, 1),
+                "frames_seen": frames_seen,
+                "frames_unparsed": frames_unparsed,
+                "empty_reason": _empty_reason(text, reasoning_tokens, finish_reason,
+                                              frames_seen, frames_unparsed),
+                "deltas_per_s": round(ntok / gen, 1) if gen > 0.05 and ntok else None,
+                "tokens_per_s": round(ntok / gen, 1) if gen > 0.05 and ntok else None}
+
+    # ------------------------------------------------------------ OpenAI-compatible
+    def _chat_openai(self, system: str, user: str, mode: str = "FAST") -> dict:
+        """Returns {text, ttft_ms, gen_ms, tokens, tokens_per_s}."""
+        body = {
+            "model": self.cfg.model_for(mode),
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "max_tokens": self.max_tokens.get(mode, 800),
+            "temperature": 0.2,
+            "stream": True,
+            **_mode_params(mode, self.cfg.reasoning_param_style),
+        }
+        req = urllib.request.Request(
+            self.cfg.base_url.rstrip("/") + "/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {self.cfg.api_key}"}
+                        if self.cfg.api_key else {})})
+        t0 = time.perf_counter()
+        ttft = None
+        parts: list[str] = []
+        ntok = 0
+        frames_seen = frames_unparsed = 0
+        # F-V3-09: reasoning models (Qwen3.x) stream their chain-of-thought in a
+        # SEPARATE field and emit `content` only afterwards. Counting only
+        # `content` made a model that spent its whole token budget thinking look
+        # identical to a model that answered nothing — 22s of generation and an
+        # empty string. Track reasoning separately so the caller can tell the
+        # difference and report it honestly.
+        reasoning_tokens = 0
+        finish_reason = None
+        try:
+            with urllib.request.urlopen(req, timeout=self.cfg.timeout_s) as r:
+                for raw in r:
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        break
+                    frames_seen += 1
+                    try:
+                        choice = json.loads(payload)["choices"][0]
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        frames_unparsed += 1
+                        continue
+                    if choice.get("finish_reason"):
+                        finish_reason = choice["finish_reason"]
+                    delta = choice.get("delta", {}) or {}
+                    # field name varies by backend/version
+                    thought = (delta.get("reasoning_content")
+                               or delta.get("reasoning") or delta.get("thinking"))
+                    if thought:
+                        reasoning_tokens += 1
+                    content = delta.get("content")
+                    if content:
+                        if ttft is None:
+                            ttft = time.perf_counter() - t0
+                        parts.append(content)
+                        ntok += 1
+        except urllib.error.HTTPError as e:
+            raise LLMError(
+                f"LLM endpoint refused the request at {self.cfg.base_url}: "
+                f"{_http_error_detail(e)}") from e
+        except OSError as e:
+            raise LLMError(f"LLM endpoint unreachable at {self.cfg.base_url}: {e}") from e
+        total = time.perf_counter() - t0
+        gen = total - (ttft or 0)
+        text = "".join(parts).strip()
+        return {"text": text,
+                "ttft_ms": round((ttft or 0) * 1000, 1),
+                "gen_ms": round(gen * 1000, 1),
+                # NOTE: these count STREAM DELTAS, not tokens. A delta usually
+                # carries one token but the backend makes no such guarantee, so
+                # the derived rate is reported as deltas/sec under an honest
+                # name rather than as tokens/sec.
+                "content_deltas": ntok,
+                "tokens": ntok,               # retained for compatibility
+                "reasoning_deltas": reasoning_tokens,
+                "reasoning_tokens": reasoning_tokens,
+                "finish_reason": finish_reason,
+                "total_ms": round(total * 1000, 1),
+                "frames_seen": frames_seen,
+                "frames_unparsed": frames_unparsed,
+                "empty_reason": _empty_reason(text, reasoning_tokens, finish_reason,
+                                              frames_seen, frames_unparsed),
+                "deltas_per_s": round(ntok / gen, 1) if gen > 0.05 and ntok else None,
+                "tokens_per_s": round(ntok / gen, 1) if gen > 0.05 and ntok else None}
+
+    def health(self) -> bool:
+        try:
+            req = urllib.request.Request(self.cfg.base_url.rstrip("/") + "/models")
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status == 200
+        except OSError:
+            return False
