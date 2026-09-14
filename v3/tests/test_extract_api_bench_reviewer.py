@@ -104,7 +104,9 @@ def client(ingested):
     from fastapi.testclient import TestClient
     cfg, _ = ingested
     from alirag.api import create_app
-    with TestClient(create_app(cfg)) as c:
+    cfg.api_token = "test-token"
+    with TestClient(create_app(cfg),
+                    headers={"Authorization": "Bearer test-token"}) as c:
         yield c, cfg
 
 

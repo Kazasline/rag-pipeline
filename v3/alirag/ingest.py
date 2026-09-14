@@ -21,6 +21,7 @@ from .dense import make_dense
 from .embed import make_embedder
 from .extract import ExtractionError, extract_any, render_page_images
 from .graph import Graph
+from .inventory import _purge_derived
 from .manifest import Manifest
 from .safety import SafetyGuard
 from .sparse import SparseIndex
@@ -61,6 +62,7 @@ class Ingestor:
             return "skipped"
 
         self.mf.set_state(fid, "EXTRACTING")
+        self.mf.commit()
         try:
             segments, parser = extract_any(
                 path, ext, ocr=ocr, ocr_lang=self.cfg.ingest.ocr_lang,
@@ -74,6 +76,7 @@ class Ingestor:
             return "failed"
 
         if not segments:
+            _purge_derived(self.cfg, self.mf, fid)
             self.mf.set_state(fid, "INDEXED", "no extractable text")
             self.mf.con.execute(
                 "UPDATE files SET parser_used=?, page_count=0 WHERE file_id=?",
@@ -81,57 +84,55 @@ class Ingestor:
             self.mf.commit()
             return "empty"
 
-        chunks = chunk_segments(segments, self.cfg.ingest.chunk_chars,
-                                self.cfg.ingest.chunk_overlap)
-        # replace prior derived data for this file across all indexes
-        old_ids = [r[0] for r in self.mf.con.execute(
-            "SELECT chunk_id FROM chunks WHERE file_id=?", (fid,))]
-        if old_ids:
-            self.sparse.delete_file(old_ids)
+        try:
+            chunks = chunk_segments(segments, self.cfg.ingest.chunk_chars,
+                                    self.cfg.ingest.chunk_overlap)
+            _purge_derived(self.cfg, self.mf, fid)
+            chunk_ids = self.mf.replace_chunks(fid, chunks)
+
+            self.sparse.index_chunks([
+                {"chunk_id": cid, "file_id": fid, "text": ch["text"],
+                 "filename": file_row["filename"], "project": file_row["project"]}
+                for cid, ch in zip(chunk_ids, chunks)])
+
+            # dense embeddings, precomputed now so query time stays light (§11)
+            for b in range(0, len(chunks), EMBED_BATCH):
+                batch_ids = chunk_ids[b:b + EMBED_BATCH]
+                vecs = self.embedder.embed([c["text"] for c in chunks[b:b + EMBED_BATCH]])
+                try:
+                    self.dense.add(batch_ids, vecs,
+                                   payloads=[{"project": file_row["project"],
+                                              "file_id": fid}] * len(batch_ids))
+                except TypeError:  # memmap backend takes no payloads
+                    self.dense.add(batch_ids, vecs)
+            self.mf.con.executemany("UPDATE chunks SET embedded=1 WHERE chunk_id=?",
+                                    [(c,) for c in chunk_ids])
+
+            self.graph.extract_from_file(file_row, list(zip(chunk_ids, chunks)))
+
+            pages = sorted({c["page"] for c in chunks if c["page"]})
+            if render_pages and ext == ".pdf":
+                render_page_images(path, self.cfg.dir("page_images"), fid,
+                                   max_px=self.cfg.ingest.page_image_max_px,
+                                   pages=pages[:200])
+            self.mf.con.execute(
+                "UPDATE files SET parser_used=?, page_count=?, extraction_confidence=? "
+                "WHERE file_id=?",
+                (parser, max(pages) if pages else len(segments),
+                 0.9 if "ocr" not in parser.lower() else 0.6, fid))
+            self.mf.set_state(fid, "INDEXED")
+            self.mf.commit()
+            return "ok"
+        except Exception as e:  # noqa: BLE001 — quarantine, never crash the run
             try:
-                self.dense.remove(old_ids)
-            except Exception as e:  # noqa: BLE001
-                # Swallowing this silently orphans vectors on every re-ingest,
-                # so the failure is recorded even though it must not stop the run.
+                _purge_derived(self.cfg, self.mf, fid)
+            except Exception as purge_error:  # noqa: BLE001
                 self.mf.con.execute(
                     "INSERT INTO ingest_log(ts,file_id,event,detail) VALUES(?,?,?,?)",
-                    (time.time(), fid, "DENSE_REMOVE_FAILED", str(e)[:300]))
-            self.graph.delete_file_edges(fid)
-        chunk_ids = self.mf.replace_chunks(fid, chunks)
-
-        self.sparse.index_chunks([
-            {"chunk_id": cid, "file_id": fid, "text": ch["text"],
-             "filename": file_row["filename"], "project": file_row["project"]}
-            for cid, ch in zip(chunk_ids, chunks)])
-
-        # dense embeddings, precomputed now so query time stays light (§11)
-        for b in range(0, len(chunks), EMBED_BATCH):
-            batch_ids = chunk_ids[b:b + EMBED_BATCH]
-            vecs = self.embedder.embed([c["text"] for c in chunks[b:b + EMBED_BATCH]])
-            try:
-                self.dense.add(batch_ids, vecs,
-                               payloads=[{"project": file_row["project"],
-                                          "file_id": fid}] * len(batch_ids))
-            except TypeError:  # memmap backend takes no payloads
-                self.dense.add(batch_ids, vecs)
-        self.mf.con.executemany("UPDATE chunks SET embedded=1 WHERE chunk_id=?",
-                                [(c,) for c in chunk_ids])
-
-        self.graph.extract_from_file(file_row, list(zip(chunk_ids, chunks)))
-
-        pages = sorted({c["page"] for c in chunks if c["page"]})
-        if render_pages and ext == ".pdf":
-            render_page_images(path, self.cfg.dir("page_images"), fid,
-                               max_px=self.cfg.ingest.page_image_max_px,
-                               pages=pages[:200])
-        self.mf.con.execute(
-            "UPDATE files SET parser_used=?, page_count=?, extraction_confidence=? "
-            "WHERE file_id=?",
-            (parser, max(pages) if pages else len(segments),
-             0.9 if "ocr" not in parser.lower() else 0.6, fid))
-        self.mf.set_state(fid, "INDEXED")
-        self.mf.commit()
-        return "ok"
+                    (time.time(), fid, "PURGE_FAILED", str(purge_error)[:300]))
+            self.mf.set_state(fid, "FAILED", f"index: {e}")
+            self.mf.commit()
+            return "failed"
 
     # ------------------------------------------------------------ run
     def run(self, *, states: tuple = ("CLASSIFIED", "UPDATED"),
@@ -158,6 +159,7 @@ class Ingestor:
             except Exception as e:  # noqa: BLE001 — last-resort quarantine
                 self.mf.set_state(row["file_id"], "FAILED",
                                   f"pipeline: {e}\n{traceback.format_exc()[:300]}")
+                self.mf.commit()
                 r = "failed"
             counts[r] = counts.get(r, 0) + 1
             if i % 25 == 0 or i == len(todo):

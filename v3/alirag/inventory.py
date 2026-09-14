@@ -243,6 +243,70 @@ def _sync_sparse_projects(cfg: Config, mf: Manifest) -> int:
     return n
 
 
+def _purge_derived(cfg: Config, mf: Manifest, fid: int):
+    """Remove all derived index data for a file."""
+    from .dense import make_dense
+    from .graph import Graph
+    from .sparse import SparseIndex
+
+    ids = [r[0] for r in mf.con.execute(
+        "SELECT chunk_id FROM chunks WHERE file_id=?", (fid,))]
+    sparse = SparseIndex(cfg.sparse_db)
+    graph = Graph(cfg.graph_db)
+    try:
+        sparse.delete_file(ids)
+        try:
+            make_dense(cfg).remove(ids)
+        except Exception as e:  # noqa: BLE001
+            mf.con.execute(
+                "INSERT INTO ingest_log(ts,file_id,event,detail) VALUES(?,?,?,?)",
+                (time.time(), fid, "DENSE_REMOVE_FAILED", str(e)[:300]))
+        graph.delete_file_edges(fid)
+        mf.con.execute("DELETE FROM chunks WHERE file_id=?", (fid,))
+    finally:
+        sparse.close()
+        graph.close()
+
+
+def _reconcile_missing(cfg: Config, mf: Manifest, known: dict, seen: set[str],
+                       new_fids: dict[int, tuple[str, int]]) -> dict:
+    """Reconcile rows absent from a complete inventory walk."""
+    moved = 0
+    missing = 0
+    consumed: set[int] = set()
+    for path in known:
+        if path in seen:
+            continue
+        row = mf.con.execute(
+            "SELECT * FROM files WHERE original_path=?", (path,)).fetchone()
+        if row is None or row["index_status"] == "MISSING":
+            continue
+        move_fid = None
+        if row["hash_kind"] == "blake2b":
+            for fid, (digest, size) in new_fids.items():
+                if fid not in consumed and digest == row["content_hash"] and size == row["size"]:
+                    move_fid = fid
+                    break
+        if move_fid is not None:
+            new_row = mf.get(move_fid)
+            fields = ("original_path", "filename", "extension", "mtime_ns",
+                      "created_date", "modified_date", "project", "project_source",
+                      "document_type", "discipline", "revision")
+            mf.con.execute("DELETE FROM ingest_log WHERE file_id=?", (move_fid,))
+            mf.con.execute("DELETE FROM files WHERE file_id=?", (move_fid,))
+            mf.con.execute(
+                f"UPDATE files SET {', '.join(f'{f}=?' for f in fields)} WHERE file_id=?",
+                [*(new_row[f] for f in fields), row["file_id"]])
+            consumed.add(move_fid)
+            moved += 1
+            continue
+        mf.set_state(row["file_id"], "MISSING", "not found in complete inventory scan")
+        _purge_derived(cfg, mf, row["file_id"])
+        missing += 1
+    mf.commit()
+    return {"moved": moved, "missing": missing}
+
+
 def scan(cfg: Config, guard: SafetyGuard, mf: Manifest,
          max_files: int | None = None, progress_every: int = 2000,
          roots: list[str] | None = None) -> dict:
@@ -257,9 +321,13 @@ def scan(cfg: Config, guard: SafetyGuard, mf: Manifest,
     """
     t0 = time.time()
     counts = {"new": 0, "unchanged": 0, "updated": 0, "errors": 0, "seen": 0}
-    known = {r["original_path"]: (r["size"], r["mtime_ns"], r["content_hash"], r["hash_kind"])
+    known = {r["original_path"]: (r["size"], r["mtime_ns"], r["content_hash"],
+                                  r["hash_kind"], r["index_status"])
              for r in mf.con.execute(
-                 "SELECT original_path,size,mtime_ns,content_hash,hash_kind FROM files")}
+                 "SELECT original_path,size,mtime_ns,content_hash,hash_kind,index_status "
+                 "FROM files")}
+    seen: set[str] = set()
+    new_fids: dict[int, tuple[str, int]] = {}
     for root in (roots if roots else cfg.source_roots):
         root = str(root)
         if not os.path.isdir(root):
@@ -275,6 +343,7 @@ def scan(cfg: Config, guard: SafetyGuard, mf: Manifest,
                     continue
                 p = os.path.join(dirpath, fn)
                 counts["seen"] += 1
+                seen.add(p)
                 if progress_every and counts["seen"] % progress_every == 0:
                     print(f"[inventory] {counts['seen']} files seen "
                           f"({time.time()-t0:.0f}s)", flush=True)
@@ -284,7 +353,8 @@ def scan(cfg: Config, guard: SafetyGuard, mf: Manifest,
                     counts["errors"] += 1
                     continue
                 prior = known.get(p)
-                if prior and prior[0] == st.st_size and prior[1] == st.st_mtime_ns:
+                if (prior and prior[0] == st.st_size and prior[1] == st.st_mtime_ns
+                        and prior[4] != "MISSING"):
                     counts["unchanged"] += 1
                     continue
                 ext = os.path.splitext(fn)[1].lower()
@@ -310,6 +380,8 @@ def scan(cfg: Config, guard: SafetyGuard, mf: Manifest,
                 fid, disp = mf.upsert_file(rec)
                 counts[disp] += 1
                 if disp == "new":
+                    new_fids[fid] = (digest, st.st_size)
+                if disp == "new":
                     state = ("CLASSIFIED" if stype in ("knowledge", "image", "cad")
                              else "UNSUPPORTED" if stype == "unsupported"
                              else "SKIPPED")
@@ -320,6 +392,13 @@ def scan(cfg: Config, guard: SafetyGuard, mf: Manifest,
             mf.commit()
             if max_files and counts["seen"] >= max_files:
                 break
+    complete = (max_files is None and roots is None
+                and not counts.get("missing_roots"))
+    if complete:
+        counts.update(_reconcile_missing(cfg, mf, known, seen, new_fids))
+    else:
+        counts.update({"moved": 0, "missing": 0})
+    counts["reconciled"] = complete
     dup = mf.tag_duplicates()
     fams = link_revision_families(mf)
     mf.commit()

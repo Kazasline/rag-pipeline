@@ -58,14 +58,14 @@ class Retriever:
     def _chunks_for_project(self, project: str) -> set[int]:
         return {r[0] for r in self.mf.con.execute(
             "SELECT c.chunk_id FROM chunks c JOIN files f ON f.file_id=c.file_id "
-            "WHERE f.project=?", (project,))}
+            "WHERE f.project=? AND f.index_status='INDEXED'", (project,))}
 
     def hydrate(self, hits: list[dict]) -> list[dict]:
         """Attach chunk text + full provenance to fused hits."""
         out = []
         for h in hits:
             row = self.mf.chunk(h["chunk_id"])
-            if row is None:
+            if row is None or row["index_status"] != "INDEXED":
                 continue
             out.append({**h, "text": row["text"], "page": row["page"],
                         "locator": row["locator"], "filename": row["filename"],

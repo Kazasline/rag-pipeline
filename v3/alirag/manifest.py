@@ -9,7 +9,7 @@ that cannot be inferred with evidence stay 'UNKNOWN' — never invented.
 
 Ingestion states (§78):
 DISCOVERED -> CLASSIFIED -> EXTRACTING -> INDEXED
-                         -> FAILED / UNSUPPORTED / SKIPPED / UPDATED
+                         -> FAILED / UNSUPPORTED / SKIPPED / UPDATED / MISSING
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from pathlib import Path
 UNKNOWN = "UNKNOWN"
 
 STATES = ("DISCOVERED", "CLASSIFIED", "EXTRACTING", "INDEXED",
-          "FAILED", "UNSUPPORTED", "SKIPPED", "UPDATED")
+          "FAILED", "UNSUPPORTED", "SKIPPED", "UPDATED", "MISSING")
 
 DUP_TAGS = ("EXACT_DUPLICATE", "PROBABLE_DUPLICATE", "REVISION", "UNRELATED")
 
@@ -108,7 +108,8 @@ class Manifest:
         """Insert or refresh a discovered file. Returns (file_id, disposition)
         where disposition is 'new' | 'unchanged' | 'updated'."""
         row = self.con.execute(
-            "SELECT file_id, content_hash, size, mtime_ns FROM files WHERE original_path=?",
+            "SELECT file_id, content_hash, size, mtime_ns, index_status "
+            "FROM files WHERE original_path=?",
             (rec["original_path"],)).fetchone()
         now = time.time()
         if row is None:
@@ -120,6 +121,11 @@ class Manifest:
             return cur.lastrowid, "new"
         if (row["content_hash"] == rec["content_hash"]
                 and row["size"] == rec["size"]):
+            if row["index_status"] == "MISSING":
+                self.con.execute(
+                    "UPDATE files SET index_status='UPDATED', index_note='' "
+                    "WHERE file_id=?", (row["file_id"],))
+                return row["file_id"], "updated"
             return row["file_id"], "unchanged"
         # content changed under the same path -> mark UPDATED; derived data
         # for the old hash is superseded and will be re-ingested
@@ -184,7 +190,7 @@ class Manifest:
         return self.con.execute(
             "SELECT c.*, f.original_path, f.filename, f.project, f.project_source, "
             "f.revision, "
-            "f.document_type, f.superseded_by "
+            "f.document_type, f.superseded_by, f.index_status "
             "FROM chunks c JOIN files f ON f.file_id=c.file_id WHERE c.chunk_id=?",
             (chunk_id,)).fetchone()
 

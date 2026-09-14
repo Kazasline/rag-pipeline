@@ -194,6 +194,8 @@ def extract_pptx(path: str) -> list[dict]:
 # ---------------------------------------------------------------- plain / data
 def extract_text(path: str) -> list[dict]:
     raw = Path(path).read_bytes()
+    if not raw.strip():
+        return []
     return [seg(raw.decode("utf-8", errors="replace"))]
 
 
