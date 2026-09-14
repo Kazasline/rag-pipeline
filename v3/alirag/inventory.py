@@ -243,29 +243,25 @@ def _sync_sparse_projects(cfg: Config, mf: Manifest) -> int:
     return n
 
 
-def _purge_derived(cfg: Config, mf: Manifest, fid: int):
+def _purge_derived(mf: Manifest, fid: int, *, sparse, dense, graph):
     """Remove all derived index data for a file."""
-    from .dense import make_dense
-    from .graph import Graph
-    from .sparse import SparseIndex
-
     ids = [r[0] for r in mf.con.execute(
         "SELECT chunk_id FROM chunks WHERE file_id=?", (fid,))]
-    sparse = SparseIndex(cfg.sparse_db)
-    graph = Graph(cfg.graph_db)
-    try:
-        sparse.delete_file(ids)
+    sparse.delete_file(ids)
+    if dense is None:
+        mf.con.execute(
+            "INSERT INTO ingest_log(ts,file_id,event,detail) VALUES(?,?,?,?)",
+            (time.time(), fid, "DENSE_REMOVE_FAILED",
+             "dense index unavailable during purge"))
+    else:
         try:
-            make_dense(cfg).remove(ids)
+            dense.remove(ids)
         except Exception as e:  # noqa: BLE001
             mf.con.execute(
                 "INSERT INTO ingest_log(ts,file_id,event,detail) VALUES(?,?,?,?)",
                 (time.time(), fid, "DENSE_REMOVE_FAILED", str(e)[:300]))
-        graph.delete_file_edges(fid)
-        mf.con.execute("DELETE FROM chunks WHERE file_id=?", (fid,))
-    finally:
-        sparse.close()
-        graph.close()
+    graph.delete_file_edges(fid)
+    mf.con.execute("DELETE FROM chunks WHERE file_id=?", (fid,))
 
 
 def _reconcile_missing(cfg: Config, mf: Manifest, known: dict, seen: set[str],
@@ -274,36 +270,52 @@ def _reconcile_missing(cfg: Config, mf: Manifest, known: dict, seen: set[str],
     moved = 0
     missing = 0
     consumed: set[int] = set()
-    for path in known:
-        if path in seen:
-            continue
-        row = mf.con.execute(
-            "SELECT * FROM files WHERE original_path=?", (path,)).fetchone()
-        if row is None or row["index_status"] == "MISSING":
-            continue
-        move_fid = None
-        if row["hash_kind"] == "blake2b":
-            for fid, (digest, size) in new_fids.items():
-                if fid not in consumed and digest == row["content_hash"] and size == row["size"]:
-                    move_fid = fid
-                    break
-        if move_fid is not None:
-            new_row = mf.get(move_fid)
-            fields = ("original_path", "filename", "extension", "mtime_ns",
-                      "created_date", "modified_date", "project", "project_source",
-                      "document_type", "discipline", "revision")
-            mf.con.execute("DELETE FROM ingest_log WHERE file_id=?", (move_fid,))
-            mf.con.execute("DELETE FROM files WHERE file_id=?", (move_fid,))
-            mf.con.execute(
-                f"UPDATE files SET {', '.join(f'{f}=?' for f in fields)} WHERE file_id=?",
-                [*(new_row[f] for f in fields), row["file_id"]])
-            consumed.add(move_fid)
-            moved += 1
-            continue
-        mf.set_state(row["file_id"], "MISSING", "not found in complete inventory scan")
-        _purge_derived(cfg, mf, row["file_id"])
-        missing += 1
-    mf.commit()
+    from .dense import make_dense
+    from .graph import Graph
+    from .sparse import SparseIndex
+
+    sparse = SparseIndex(cfg.sparse_db)
+    graph = Graph(cfg.graph_db)
+    try:
+        try:
+            dense = make_dense(cfg)
+        except Exception:
+            dense = None
+        for path in known:
+            if path in seen:
+                continue
+            row = mf.con.execute(
+                "SELECT * FROM files WHERE original_path=?", (path,)).fetchone()
+            if row is None or row["index_status"] == "MISSING":
+                continue
+            move_fid = None
+            if row["hash_kind"] == "blake2b":
+                for fid, (digest, size) in new_fids.items():
+                    if (fid not in consumed and digest == row["content_hash"]
+                            and size == row["size"]):
+                        move_fid = fid
+                        break
+            if move_fid is not None:
+                new_row = mf.get(move_fid)
+                fields = ("original_path", "filename", "extension", "mtime_ns",
+                          "created_date", "modified_date", "project", "project_source",
+                          "document_type", "discipline", "revision")
+                mf.con.execute("DELETE FROM ingest_log WHERE file_id=?", (move_fid,))
+                mf.con.execute("DELETE FROM files WHERE file_id=?", (move_fid,))
+                mf.con.execute(
+                    f"UPDATE files SET {', '.join(f'{f}=?' for f in fields)} WHERE file_id=?",
+                    [*(new_row[f] for f in fields), row["file_id"]])
+                consumed.add(move_fid)
+                moved += 1
+                continue
+            mf.set_state(row["file_id"], "MISSING",
+                         "not found in complete inventory scan")
+            _purge_derived(mf, row["file_id"], sparse=sparse, dense=dense, graph=graph)
+            missing += 1
+        mf.commit()
+    finally:
+        sparse.close()
+        graph.close()
     return {"moved": moved, "missing": missing}
 
 
@@ -381,7 +393,6 @@ def scan(cfg: Config, guard: SafetyGuard, mf: Manifest,
                 counts[disp] += 1
                 if disp == "new":
                     new_fids[fid] = (digest, st.st_size)
-                if disp == "new":
                     state = ("CLASSIFIED" if stype in ("knowledge", "image", "cad")
                              else "UNSUPPORTED" if stype == "unsupported"
                              else "SKIPPED")

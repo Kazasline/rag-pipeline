@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 
 import pytest
@@ -140,6 +141,24 @@ def test_failed_reingest_leaves_no_partial_index(ingested, monkeypatch):
         assert all(s["file_id"] != fid for s in resp["sources"])
     finally:
         engine.close()
+
+
+def test_reingest_keeps_dense_rowmap_consistent(ingested):
+    cfg, mf = ingested
+    row = _row(mf, "Landscape Tender Spec R01.txt")
+    fid = row["file_id"]
+    old_ids = {r[0] for r in mf.con.execute(
+        "SELECT chunk_id FROM chunks WHERE file_id=?", (fid,))}
+    from alirag.ingest import Ingestor
+    ing = Ingestor(cfg, mf=mf)
+    try:
+        assert ing.ingest_file(row) == "ok"
+        disk_map = json.loads((cfg.dense_dir / "rowmap.json").read_text())
+        assert ing.dense._rowmap == disk_map
+        assert not old_ids.intersection(disk_map)
+    finally:
+        ing.sparse.close()
+        ing.graph.close()
 
 
 def test_empty_update_purges_old_content(ingested):

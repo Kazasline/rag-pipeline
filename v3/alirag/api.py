@@ -22,6 +22,8 @@ Run:  alirag serve      (uvicorn, 127.0.0.1:8642)
 # `X | None` is valid at runtime on the target Python (3.11), so nothing here
 # needs the future import.
 
+import hmac
+
 from .answer import Engine
 from .config import Config, is_loopback_host, load_config
 from .instrument import percentiles
@@ -38,7 +40,6 @@ def create_app(cfg: Config | None = None):
         if not cfg.api_token:
             raise HTTPException(403, "endpoint disabled: set api_token in config to enable")
         expected = f"Bearer {cfg.api_token}"
-        import hmac
         if authorization is None or not hmac.compare_digest(authorization, expected):
             raise HTTPException(401, "invalid or missing bearer token")
 

@@ -76,7 +76,8 @@ class Ingestor:
             return "failed"
 
         if not segments:
-            _purge_derived(self.cfg, self.mf, fid)
+            _purge_derived(self.mf, fid, sparse=self.sparse, dense=self.dense,
+                           graph=self.graph)
             self.mf.set_state(fid, "INDEXED", "no extractable text")
             self.mf.con.execute(
                 "UPDATE files SET parser_used=?, page_count=0 WHERE file_id=?",
@@ -87,7 +88,8 @@ class Ingestor:
         try:
             chunks = chunk_segments(segments, self.cfg.ingest.chunk_chars,
                                     self.cfg.ingest.chunk_overlap)
-            _purge_derived(self.cfg, self.mf, fid)
+            _purge_derived(self.mf, fid, sparse=self.sparse, dense=self.dense,
+                           graph=self.graph)
             chunk_ids = self.mf.replace_chunks(fid, chunks)
 
             self.sparse.index_chunks([
@@ -125,7 +127,8 @@ class Ingestor:
             return "ok"
         except Exception as e:  # noqa: BLE001 — quarantine, never crash the run
             try:
-                _purge_derived(self.cfg, self.mf, fid)
+                _purge_derived(self.mf, fid, sparse=self.sparse, dense=self.dense,
+                               graph=self.graph)
             except Exception as purge_error:  # noqa: BLE001
                 self.mf.con.execute(
                     "INSERT INTO ingest_log(ts,file_id,event,detail) VALUES(?,?,?,?)",
