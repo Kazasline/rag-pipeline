@@ -383,6 +383,7 @@ class SafetyGuard:
 
         rag_mod, excl_mod, unexplained_mod = classify(modified)
         rag_del, excl_del, unexplained_del = classify(still_deleted)
+        rag_added, excluded_added, unexplained_added = classify(added)
 
         # `moved` was the one category classify() never saw (round-7 R7-6), so
         # ordinary log rotation inside a live-service directory —
@@ -409,13 +410,14 @@ class SafetyGuard:
         excl_doc_mod = _documents(excl_mod)
         excl_doc_del = _documents(excl_del)
 
+        excl_doc_added = _documents(excluded_added)
         passed = not (rag_mod or unexplained_mod or rag_del
-                      or unexplained_del or real_moved
-                      or excl_doc_mod or excl_doc_del)
+                      or unexplained_del or real_moved or rag_added
+                      or excl_doc_mod or excl_doc_del or excl_doc_added)
         # A pass earned by an allowlist is not a clean run, and the machine-
         # readable verdict must say so rather than leaving it to a detail
         # string nobody parses (round-3 reviewer R3-7).
-        excluded_changed = bool(excl_mod or excl_del or excl_moved)
+        excluded_changed = bool(excl_mod or excl_del or excl_moved or excluded_added)
         verdict = ("FAIL" if not passed else
                    "PASS_WITH_EXCLUSIONS" if excluded_changed else
                    "PASS")
@@ -428,18 +430,24 @@ class SafetyGuard:
             # RAG-attributable — a genuine breach by this system
             "rag_modified": rag_mod,
             "rag_deleted": rag_del,
+            "rag_added": rag_added,
             # changed by something else and NOT declared — must be reviewed
             "unexplained_modified": unexplained_mod,
             "unexplained_deleted": unexplained_del,
+            "unexplained_added": unexplained_added,
+            "unexplained_added_count": len(unexplained_added),
             # excused only because the operator declared the pattern volatile
+            "excluded_added": excluded_added,
             # changed inside a directory the operator excluded from indexing:
             # not a breach, but NEVER silently absent from the report (R6-1)
             "excluded_dir_modified": excl_mod,
             "excluded_dir_deleted": excl_del,
+            "excluded_dir_added": excluded_added,
             # ...unless they are documents, which means the exclusion list and
             # the corpus overlap — a configuration error that fails
             "excluded_dir_documents_modified": excl_doc_mod,
             "excluded_dir_documents_deleted": excl_doc_del,
+            "excluded_dir_documents_added": excl_doc_added,
             "excluded_dirs": list(self.excluded_dirs),
             "moved": real_moved,
             "excluded_dir_moved": excl_moved,

@@ -208,6 +208,8 @@ class Config:
                                                     for k, v in DEFAULT_POLICIES.items()})
     api_host: str = "127.0.0.1"          # localhost-only by default (§52)
     api_token: str = ""
+    api_ssl_certfile: str = ""
+    api_ssl_keyfile: str = ""
     api_port: int = 8642
     # Path patterns (fnmatch) whose changes the OPERATOR declares expected —
     # live services rewriting their own logs/locks/state under a source root.
@@ -269,7 +271,8 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     for cand in candidates:
         if cand.is_file() and yaml:
             data = yaml.safe_load(cand.read_text(encoding="utf-8")) or {}
-            for key in ("workspace", "source_roots", "api_host", "api_token", "api_port",
+            for key in ("workspace", "source_roots", "api_host", "api_token",
+                        "api_ssl_certfile", "api_ssl_keyfile", "api_port",
                         "volatile_patterns"):
                 if key in data:
                     setattr(cfg, key, data[key])
@@ -294,6 +297,10 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         cfg.embed.provider = os.environ["ALIRAG_EMBED_PROVIDER"]
     if os.environ.get("ALIRAG_API_TOKEN"):
         cfg.api_token = os.environ["ALIRAG_API_TOKEN"]
+    if os.environ.get("ALIRAG_API_SSL_CERTFILE"):
+        cfg.api_ssl_certfile = os.environ["ALIRAG_API_SSL_CERTFILE"]
+    if os.environ.get("ALIRAG_API_SSL_KEYFILE"):
+        cfg.api_ssl_keyfile = os.environ["ALIRAG_API_SSL_KEYFILE"]
     return cfg
 
 

@@ -31,10 +31,13 @@ from .instrument import percentiles
 
 def create_app(cfg: Config | None = None):
     from fastapi import FastAPI
-    from fastapi import Depends, Header, HTTPException
+    from fastapi import Depends, HTTPException
+    from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
     from pydantic import BaseModel, Field
+    from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
     cfg = cfg or load_config()
+    bearer = HTTPBearer(auto_error=False)
 
     def _check_token(authorization: str | None):
         if not cfg.api_token:
@@ -44,16 +47,40 @@ def create_app(cfg: Config | None = None):
                 authorization.encode("utf-8", errors="replace"), expected):
             raise HTTPException(401, "invalid or missing bearer token")
 
-    def require_token(authorization: str | None = Header(default=None)):
+    def require_token(
+            credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
+        authorization = (f"{credentials.scheme} {credentials.credentials}"
+                         if credentials is not None else None)
         _check_token(authorization)
 
-    def require_token_if_configured(authorization: str | None = Header(default=None)):
+    def require_token_if_configured(
+            credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
         if cfg.api_token:
+            authorization = (f"{credentials.scheme} {credentials.credentials}"
+                             if credentials is not None else None)
             _check_token(authorization)
 
     app = FastAPI(title="ALI RAG V3", version="3.0.0",
+                  docs_url=None if cfg.api_token else "/docs",
+                  redoc_url=None if cfg.api_token else "/redoc",
+                  openapi_url=None if cfg.api_token else "/openapi.json",
                   dependencies=[Depends(require_token_if_configured)])
     engine = Engine(cfg)
+
+    if cfg.api_token:
+        @app.get("/openapi.json", include_in_schema=False)
+        def openapi():
+            return app.openapi()
+
+        @app.get("/docs", include_in_schema=False)
+        def swagger_ui():
+            return get_swagger_ui_html(openapi_url="/openapi.json",
+                                       title="ALI RAG V3 - Swagger UI")
+
+        @app.get("/redoc", include_in_schema=False)
+        def redoc():
+            return get_redoc_html(openapi_url="/openapi.json",
+                                  title="ALI RAG V3 - ReDoc")
 
     class QueryIn(BaseModel):
         query: str = Field(min_length=1, max_length=4000)
@@ -133,10 +160,16 @@ def create_app(cfg: Config | None = None):
 def serve(cfg: Config | None = None):
     import uvicorn
     cfg = cfg or load_config()
+    if bool(cfg.api_ssl_certfile) != bool(cfg.api_ssl_keyfile):
+        raise RuntimeError("api_ssl_certfile and api_ssl_keyfile must be set together")
     if not is_loopback_host(cfg.api_host) and not cfg.api_token:
         raise RuntimeError(
             "api_host is not loopback; refusing to expose the API without api_token "
             "(set api_token in config or ALIRAG_API_TOKEN)")
-    if not is_loopback_host(cfg.api_host) and cfg.api_token:
+    uvicorn_kwargs = {}
+    if not is_loopback_host(cfg.api_host) and cfg.api_ssl_certfile:
+        uvicorn_kwargs["ssl_certfile"] = cfg.api_ssl_certfile
+        uvicorn_kwargs["ssl_keyfile"] = cfg.api_ssl_keyfile
+    elif not is_loopback_host(cfg.api_host) and cfg.api_token:
         print("Warning: API is exposed without TLS; terminate TLS at a reverse proxy.")
-    uvicorn.run(create_app(cfg), host=cfg.api_host, port=cfg.api_port)
+    uvicorn.run(create_app(cfg), host=cfg.api_host, port=cfg.api_port, **uvicorn_kwargs)

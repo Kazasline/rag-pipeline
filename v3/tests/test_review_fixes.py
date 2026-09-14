@@ -223,6 +223,8 @@ def test_api_default_token_disables_mutations(api_client):
     assert client.post("/reindex?file_id=1").status_code == 403
     assert client.get("/source/1").status_code == 403
     assert client.get("/health").status_code == 200
+    assert client.get("/openapi.json").status_code == 200
+    assert client.get("/docs").status_code == 200
     assert client.post("/query", json={"query": "LAI-003", "use_llm": False}).status_code == 200
 
 
@@ -244,8 +246,17 @@ def test_api_token_protects_and_curates_source(api_client):
     assert "mtime_ns" not in resp.json()
     assert client.get("/health",
                       headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert client.get("/health",
+                      headers={"Authorization": "bearer s3cret"}).status_code == 401
     for raw in (b"Bearer s\xe9cret", b"Bearer s3cret\xc3\xa9"):
         assert client.get("/health", headers={b"Authorization": raw}).status_code == 401
+    from fastapi.testclient import TestClient
+    from alirag.api import create_app
+    with TestClient(create_app(cfg)) as docs_client:
+        for path in ("/openapi.json", "/docs"):
+            assert docs_client.get(path).status_code == 401
+            assert docs_client.get(
+                path, headers={"Authorization": "Bearer s3cret"}).status_code == 200
 
 
 def test_api_query_length_bounded(api_client):
@@ -265,6 +276,58 @@ def test_api_serve_refuses_non_loopback_without_token(ingested, monkeypatch):
     called = []
     monkeypatch.setattr("uvicorn.run", lambda *a, **k: called.append(True))
     with pytest.raises(RuntimeError):
+        serve(cfg)
+    assert not called
+
+
+def test_api_serve_passes_tls_files(ingested, monkeypatch):
+    pytest.importorskip("fastapi")
+    pytest.importorskip("uvicorn")
+    from alirag.api import serve
+    cfg, _ = ingested
+    cfg.api_host = "0.0.0.0"
+    cfg.api_token = "test-token"
+    cfg.api_ssl_certfile = "/tmp/cert.pem"
+    cfg.api_ssl_keyfile = "/tmp/key.pem"
+    captured = {}
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: captured.update(k))
+
+    serve(cfg)
+
+    assert captured["ssl_certfile"] == "/tmp/cert.pem"
+    assert captured["ssl_keyfile"] == "/tmp/key.pem"
+
+
+def test_api_serve_plaintext_omits_tls_files(ingested, monkeypatch):
+    pytest.importorskip("fastapi")
+    pytest.importorskip("uvicorn")
+    from alirag.api import serve
+    cfg, _ = ingested
+    cfg.api_host = "0.0.0.0"
+    cfg.api_token = "test-token"
+    captured = {}
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: captured.update(k))
+
+    serve(cfg)
+
+    assert "ssl_certfile" not in captured
+    assert "ssl_keyfile" not in captured
+
+
+@pytest.mark.parametrize("cert,key", [("/tmp/cert.pem", ""), ("", "/tmp/key.pem")])
+def test_api_serve_requires_both_tls_files(ingested, monkeypatch, cert, key):
+    pytest.importorskip("fastapi")
+    pytest.importorskip("uvicorn")
+    from alirag.api import serve
+    cfg, _ = ingested
+    cfg.api_host = "127.0.0.1"
+    cfg.api_ssl_certfile = cert
+    cfg.api_ssl_keyfile = key
+    called = []
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: called.append(True))
+
+    with pytest.raises(RuntimeError,
+                       match="api_ssl_certfile and api_ssl_keyfile must be set together"):
         serve(cfg)
     assert not called
 
