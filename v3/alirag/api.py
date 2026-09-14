@@ -32,15 +32,16 @@ from .instrument import percentiles
 def create_app(cfg: Config | None = None):
     from fastapi import FastAPI
     from fastapi import Depends, Header, HTTPException
-    from pydantic import BaseModel
+    from pydantic import BaseModel, Field
 
     cfg = cfg or load_config()
 
     def _check_token(authorization: str | None):
         if not cfg.api_token:
             raise HTTPException(403, "endpoint disabled: set api_token in config to enable")
-        expected = f"Bearer {cfg.api_token}"
-        if authorization is None or not hmac.compare_digest(authorization, expected):
+        expected = f"Bearer {cfg.api_token}".encode()
+        if authorization is None or not hmac.compare_digest(
+                authorization.encode("utf-8", errors="replace"), expected):
             raise HTTPException(401, "invalid or missing bearer token")
 
     def require_token(authorization: str | None = Header(default=None)):
@@ -55,7 +56,7 @@ def create_app(cfg: Config | None = None):
     engine = Engine(cfg)
 
     class QueryIn(BaseModel):
-        query: str
+        query: str = Field(min_length=1, max_length=4000)
         mode: str | None = None      # override; normally the router decides
         use_llm: bool = True
 

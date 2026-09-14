@@ -244,6 +244,15 @@ def test_api_token_protects_and_curates_source(api_client):
     assert "mtime_ns" not in resp.json()
     assert client.get("/health",
                       headers={"Authorization": "Bearer wrong"}).status_code == 401
+    for raw in (b"Bearer s\xe9cret", b"Bearer s3cret\xc3\xa9"):
+        assert client.get("/health", headers={b"Authorization": raw}).status_code == 401
+
+
+def test_api_query_length_bounded(api_client):
+    client, _, _ = api_client
+    assert client.post("/query", json={"query": "", "use_llm": False}).status_code == 422
+    assert client.post("/query",
+                       json={"query": "x" * 4001, "use_llm": False}).status_code == 422
 
 
 def test_api_serve_refuses_non_loopback_without_token(ingested, monkeypatch):
