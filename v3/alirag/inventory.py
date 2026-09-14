@@ -40,6 +40,8 @@ REV_RE = re.compile(
 # is a common Malay word). Metadata must never be invented (§4), so every hint
 # is now a \b-anchored regex and abbreviations additionally require a
 # non-letter neighbour, e.g. "LAI-003" or "VO 12" but not "lain"/"volume".
+
+
 def _hint_re(token: str) -> "re.Pattern":
     esc = re.escape(token)
     if len(token) <= 3 and token.isalpha():
@@ -332,7 +334,8 @@ def scan(cfg: Config, guard: SafetyGuard, mf: Manifest,
     how a pilot indexes something meaningful.
     """
     t0 = time.time()
-    counts = {"new": 0, "unchanged": 0, "updated": 0, "errors": 0, "seen": 0}
+    counts = {"new": 0, "unchanged": 0, "updated": 0, "errors": 0, "seen": 0,
+              "walk_errors": 0}
     known = {r["original_path"]: (r["size"], r["mtime_ns"], r["content_hash"],
                                   r["hash_kind"], r["index_status"])
              for r in mf.con.execute(
@@ -340,12 +343,20 @@ def scan(cfg: Config, guard: SafetyGuard, mf: Manifest,
                  "FROM files")}
     seen: set[str] = set()
     new_fids: dict[int, tuple[str, int]] = {}
+
+    def onerror(err):
+        counts["walk_errors"] += 1
+        mf.con.execute(
+            "INSERT INTO ingest_log(ts,file_id,event,detail) VALUES(?,?,?,?)",
+            (time.time(), None, "WALK_ERROR",
+             f"{err.filename}: {err}"[:500]))
+
     for root in (roots if roots else cfg.source_roots):
         root = str(root)
         if not os.path.isdir(root):
             counts.setdefault("missing_roots", []).append(root)
             continue
-        for dirpath, dirnames, filenames in os.walk(root):
+        for dirpath, dirnames, filenames in os.walk(root, onerror=onerror):
             dirnames[:] = [d for d in dirnames if not _excluded(d, cfg)]
             if guard.in_workspace(dirpath):
                 dirnames[:] = []
@@ -404,11 +415,23 @@ def scan(cfg: Config, guard: SafetyGuard, mf: Manifest,
             if max_files and counts["seen"] >= max_files:
                 break
     complete = (max_files is None and roots is None
-                and not counts.get("missing_roots"))
+                and not counts.get("missing_roots")
+                and counts["walk_errors"] == 0 and counts["errors"] == 0)
     if complete:
         counts.update(_reconcile_missing(cfg, mf, known, seen, new_fids))
     else:
         counts.update({"moved": 0, "missing": 0})
+        if roots is not None:
+            reason = "scoped"
+        elif max_files is not None:
+            reason = "bounded"
+        elif counts.get("missing_roots"):
+            reason = "missing_roots"
+        elif counts["walk_errors"]:
+            reason = "walk_errors"
+        else:
+            reason = "stat_or_hash_errors"
+        counts["reconcile_skipped"] = reason
     counts["reconciled"] = complete
     dup = mf.tag_duplicates()
     fams = link_revision_families(mf)

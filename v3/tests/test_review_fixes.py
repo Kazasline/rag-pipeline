@@ -59,6 +59,54 @@ def test_scoped_scan_does_not_reconcile(ingested):
     assert counts["reconciled"] is False
 
 
+def test_walk_error_skips_reconciliation(ingested):
+    if os.geteuid() == 0:
+        pytest.skip("permission checks are ineffective as root")
+    cfg, mf = ingested
+    blocked = Path(cfg.source_roots[0]) / "Blocked"
+    blocked.mkdir()
+    hidden = blocked / "hidden.txt"
+    hidden.write_text("hidden inventory document", encoding="utf-8")
+    _scan(cfg, mf)
+    from alirag.ingest import Ingestor
+    ing = Ingestor(cfg, mf=mf)
+    try:
+        ing.run()
+    finally:
+        ing.sparse.close()
+        ing.graph.close()
+    try:
+        blocked.chmod(0o000)
+        counts = _scan(cfg, mf)
+        assert mf.get(
+            mf.con.execute("SELECT file_id FROM files WHERE original_path=?",
+                           (str(hidden),)).fetchone()[0])["index_status"] != "MISSING"
+        assert counts["reconciled"] is False
+        assert counts["reconcile_skipped"] == "walk_errors"
+        assert counts["walk_errors"] == 1
+    finally:
+        blocked.chmod(0o755)
+
+
+def test_stat_error_skips_reconciliation(ingested, monkeypatch):
+    cfg, mf = ingested
+    row = _row(mf, "LAI-003 turf instruction.txt")
+    target = row["original_path"]
+    from alirag import inventory
+    original_stat = inventory.os.stat
+
+    def failing_stat(path):
+        if os.fspath(path) == target:
+            raise OSError("stat failed")
+        return original_stat(path)
+
+    monkeypatch.setattr(inventory.os, "stat", failing_stat)
+    counts = _scan(cfg, mf)
+    assert counts["errors"] == 1
+    assert counts["reconciled"] is False
+    assert counts["reconcile_skipped"] == "stat_or_hash_errors"
+
+
 def test_renamed_file_is_a_move_not_a_new_identity(ingested):
     cfg, mf = ingested
     old = Path(cfg.source_roots[0]) / "Dawson/Tender/Landscape Tender Spec R01.txt"
@@ -264,6 +312,26 @@ def test_api_query_length_bounded(api_client):
     assert client.post("/query", json={"query": "", "use_llm": False}).status_code == 422
     assert client.post("/query",
                        json={"query": "x" * 4001, "use_llm": False}).status_code == 422
+
+
+def test_api_ingest_reloads_indexes(api_client):
+    client, cfg, _ = api_client
+    cfg.api_token = "test-token"
+    client.headers.update({"Authorization": "Bearer test-token"})
+    marker = "fresh-endpoint-index-marker"
+    path = Path(cfg.source_roots[0]) / "fresh-endpoint.txt"
+    path.write_text(f"Only this document contains {marker}.", encoding="utf-8")
+
+    response = client.post("/ingest")
+    assert response.status_code == 200
+    result = client.post("/query",
+                         json={"query": marker, "use_llm": False})
+    assert result.status_code == 200
+    assert any("fresh-endpoint.txt" in source["file"]
+               for source in result.json()["sources"])
+    engine = client.app.state.engine
+    disk_map = json.loads((cfg.dense_dir / "rowmap.json").read_text())
+    assert len(engine.dense._rowmap) == len(disk_map)
 
 
 def test_api_serve_refuses_non_loopback_without_token(ingested, monkeypatch):

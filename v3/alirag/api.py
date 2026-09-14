@@ -66,6 +66,7 @@ def create_app(cfg: Config | None = None):
                   openapi_url=None if cfg.api_token else "/openapi.json",
                   dependencies=[Depends(require_token_if_configured)])
     engine = Engine(cfg)
+    app.state.engine = engine
 
     if cfg.api_token:
         @app.get("/openapi.json", include_in_schema=False)
@@ -138,21 +139,34 @@ def create_app(cfg: Config | None = None):
         from .ingest import Ingestor
         from .inventory import scan
         from .safety import SafetyGuard
-        guard = SafetyGuard(cfg.source_roots, cfg.workspace,
-                            excluded_dirs=cfg.ingest.exclude_dirs)
-        inv = scan(cfg, guard, engine.mf, max_files=None)
-        ing = Ingestor(cfg, mf=engine.mf)
-        counts = ing.run(limit=limit)
-        return {"inventory": inv, "ingest": counts}
+        with engine._lock:
+            guard = SafetyGuard(cfg.source_roots, cfg.workspace,
+                                excluded_dirs=cfg.ingest.exclude_dirs)
+            inv = scan(cfg, guard, engine.mf, max_files=None)
+            ing = Ingestor(cfg, mf=engine.mf)
+            try:
+                counts = ing.run(limit=limit)
+            finally:
+                ing.sparse.close()
+                ing.graph.close()
+                engine.reload_indexes()
+            return {"inventory": inv, "ingest": counts}
 
     @app.post("/reindex", dependencies=[Depends(require_token)])
     def reindex(file_id: int):
         from .ingest import Ingestor
-        row = engine.mf.get(file_id)
-        if not row:
-            return {"error": "unknown file_id"}
-        ing = Ingestor(cfg, mf=engine.mf)
-        return {"result": ing.ingest_file(row)}
+        with engine._lock:
+            row = engine.mf.get(file_id)
+            if not row:
+                return {"error": "unknown file_id"}
+            ing = Ingestor(cfg, mf=engine.mf)
+            try:
+                result = ing.ingest_file(row)
+            finally:
+                ing.sparse.close()
+                ing.graph.close()
+                engine.reload_indexes()
+            return {"result": result}
 
     return app
 

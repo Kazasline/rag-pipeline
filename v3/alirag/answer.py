@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -53,6 +54,7 @@ class Engine:
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
+        self._lock = threading.RLock()
         self.mf = Manifest(cfg.manifest_db)
         self.sparse = SparseIndex(cfg.sparse_db)
         self.dense = make_dense(cfg)
@@ -63,6 +65,17 @@ class Engine:
         self.llm = LLMClient(cfg)
         self._projects_cache: list[str] | None = None
         self._cache_dir = cfg.dir("cache")
+
+    def reload_indexes(self):
+        with self._lock:
+            self.sparse.close()
+            self.graph.close()
+            self.sparse = SparseIndex(self.cfg.sparse_db)
+            self.dense = make_dense(self.cfg)
+            self.graph = Graph(self.cfg.graph_db)
+            self.retriever = Retriever(self.cfg, self.mf, self.sparse, self.dense,
+                                       self.graph, self.embedder)
+            self._projects_cache = None
 
     def close(self):
         self.mf.close()
@@ -127,6 +140,17 @@ class Engine:
     # ------------------------------------------------------------ main
     def query(self, query: str, mode_override: str | None = None,
               use_llm: bool = True, use_cache: bool = True) -> dict:
+        """Serialize retrieval and answer generation under the engine lock.
+
+        FULLSWING re-runs ``verify(combined, known_projects=...)`` during its
+        second_pass before building the response.
+        """
+        with self._lock:
+            return self._query_locked(query, mode_override=mode_override,
+                                      use_llm=use_llm, use_cache=use_cache)
+
+    def _query_locked(self, query: str, mode_override: str | None = None,
+                      use_llm: bool = True, use_cache: bool = True) -> dict:
         if self._projects_cache is None:
             self._projects_cache = self.retriever.known_projects()
 
