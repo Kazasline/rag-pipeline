@@ -1,0 +1,146 @@
+# ALI RAG V3 — configuration derived from the REAL Phase 0 inspection
+# of this machine on 2026-08-17 (report: E:\ALI_RAG\17_REPORTS\phase0_machine_1786940475.json).
+#
+# Measured facts this config responds to:
+#   CPU    Intel 20-core            RAM  68.3 GB
+#   GPU    RTX 5080, 16.3 GB VRAM   — only 4.7 GB FREE at inspection time
+#   CUDA   13.3                     driver 591.86
+#   E:\    1024 GB total, 281 GB free, 662,244 files
+#   Serving: Ollama ONLY (LM Studio / llama.cpp / vLLM / SGLang absent)
+#   Qdrant:  not running  -> memmap dense backend (auto-selected)
+#   torch/docling: NOT installed  -> PyMuPDF text path, no GPU Docling
+#
+# Install to:  E:\ALI_RAG\01_CONFIG\config.yaml
+
+workspace: E:\ALI_RAG
+source_roots:
+  - E:\
+
+llm:
+  # Ollama exposes an OpenAI-compatible API at /v1 — this is the only live
+  # endpoint on the machine, so it is what we use.
+  base_url: http://127.0.0.1:11434/v1
+  api_key: ""
+
+  # qwen3.8:27b is the brief's intended model and DOES exist in the Ollama
+  # library (18 GB, 256K context, text+image). It was absent from this machine
+  # at inspection time; pull it with:  ollama pull qwen3.8:27b
+  #
+  # MEASURED CONSTRAINT (§88 — stated, not hidden):
+  #   model 18.0 GB  >  VRAM 16.3 GB total (4.7 GB free at inspection)
+  # It cannot fit entirely in VRAM even with the card emptied, so Ollama will
+  # offload layers to CPU/RAM (68 GB available, so it runs). Expect TTFT in
+  # seconds. The §10 FAST objective (TTFT <1s p50) is NOT reachable with this
+  # model on this card — that is a hardware fact, not a tuning problem.
+  #
+  # Therefore: quality where it pays, speed where it matters.
+  model: qwen3.8:27b
+
+  # FAST keeps a model that genuinely fits in VRAM, so "cepat:" stays fast.
+  # DEEP/FULLSWING accept slower CPU-offloaded generation for better reasoning.
+  #
+  # CAVEAT TO BENCHMARK BEFORE TRUSTING: alternating models makes Ollama swap
+  # weights, which costs seconds on the first query after a mode change. If your
+  # usage mixes modes constantly, ONE resident model may win overall. Measure
+  # both ways with `alirag bench run --label fast` before settling.
+  model_fast: qwen3.5:9b
+  model_deep: qwen3.8:27b
+  model_fullswing: qwen3.8:27b
+
+  # qwen3.8 accepts image input, so page-image reasoning (§21) can use the same
+  # weights already resident for DEEP — no second vision model competing for
+  # VRAM. qwen3-vl:8b-instruct-q8_0 is the lighter alternative if the 27B's
+  # offload makes visual queries too slow; benchmark before choosing.
+  model_vision: qwen3.8:27b
+
+  # MEASURED (F-V3-11): via /v1/chat/completions a FAST query burned 921
+  # reasoning tokens and hit the limit with no answer — the OpenAI shim drops
+  # `think`, so thinking was never actually disabled. Ollama's native /api/chat
+  # honours it, so we speak that instead. base_url's trailing /v1 is stripped
+  # automatically.
+  api_style: ollama_native
+  reasoning_param_style: ollama_think
+
+  timeout_s: 300
+  # Raised after F-V3-09: qwen3.5 spent a 400-token FAST budget entirely on
+  # reasoning and returned an empty answer. These cover thinking + answer.
+  # With thinking genuinely off for FAST these are answer tokens, not
+  # thinking+answer. DEEP/FULLSWING keep headroom because they think on purpose.
+  max_answer_tokens_fast: 800
+  max_answer_tokens_deep: 4000
+  max_answer_tokens_fullswing: 10000
+
+embed:
+  # bge-m3:latest is confirmed installed. 1024-dim, multilingual EN+MS —
+  # the V1-proven choice on this exact corpus.
+  provider: ollama
+  base_url: http://127.0.0.1:11434
+  model: bge-m3
+  dim: 1024
+  timeout_s: 600
+
+dense:
+  # Qdrant is not running; "auto" falls back to the memmap backend, which is
+  # restart-safe and needs no service. If you later start Qdrant, this same
+  # setting will pick it up automatically — check /status to see which is live.
+  backend: auto
+  qdrant_url: http://127.0.0.1:6333
+  qdrant_collection: alirag_chunks
+
+ingest:
+  ocr_lang: eng+msa
+  chunk_chars: 1800
+  chunk_overlap: 360
+  page_image_max_px: 1600
+
+  # Exclusions tuned to what the pilot inventory actually found on E:\.
+  # These are AI infrastructure and live-service directories, not knowledge
+  # (§64/§65) — they are still inventoried, just not indexed as documents.
+  exclude_dirs:
+    - $recycle.bin
+    - system volume information
+    - node_modules
+    - .git
+    - __pycache__
+    - .venv
+    - venv
+    - appdata
+    - windows
+    - program files
+    - program files (x86)
+    - programdata
+    - .cache
+    - site-packages
+    - ali_rag
+    # --- machine-specific, from the pilot scan ---
+    - hermes            # live cron/gateway service (writes heartbeats)
+    - sci_ai_library    # AI runtime + logs, not project documents
+    - models
+    - checkpoints
+    - .ollama
+    # all 56 ingest failures came from gzip-compressed PWA icons under the
+    # llama.cpp build tree — build output is not knowledge
+    - llama.cpp
+    - llama.cpp-src
+    - dist
+    - build
+    - _gzip
+
+# volatile_patterns is REMOVED (round-6 R6-1 / round-7 R7-10).
+#
+# It used to be a per-path allowlist of changes §84 would excuse. The
+# independent reviewer broke it three times — it accepted "*", then
+# "*/Dawson/*" naming the corpus, then its own guard turned out to be masked —
+# and once the safety walk covered every file it had no remaining purpose
+# except as a bypass. It is gone; the CLI warns if a config still sets it.
+#
+# The single mechanism now is `ingest.exclude_dirs` above. A directory listed
+# there is excluded from indexing AND its changes are reported under
+# excluded_dir_* in the safety report without failing the verdict — EXCEPT for
+# files whose extension is not recognised service state (.log/.tmp/.lock/…),
+# which fail, because an exclusion overlapping real work is a configuration
+# error and §1 protects files, not file types.
+
+api:
+  host: 127.0.0.1
+  port: 8642
