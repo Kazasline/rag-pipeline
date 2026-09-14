@@ -140,11 +140,6 @@ class Engine:
     # ------------------------------------------------------------ main
     def query(self, query: str, mode_override: str | None = None,
               use_llm: bool = True, use_cache: bool = True) -> dict:
-        """Serialize retrieval and answer generation under the engine lock.
-
-        FULLSWING re-runs ``verify(combined, known_projects=...)`` during its
-        second_pass before building the response.
-        """
         with self._lock:
             return self._query_locked(query, mode_override=mode_override,
                                       use_llm=use_llm, use_cache=use_cache)
