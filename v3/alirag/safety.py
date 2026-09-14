@@ -437,7 +437,6 @@ class SafetyGuard:
             "unexplained_added": unexplained_added,
             "unexplained_added_count": len(unexplained_added),
             # excused only because the operator declared the pattern volatile
-            "excluded_added": excluded_added,
             # changed inside a directory the operator excluded from indexing:
             # not a breach, but NEVER silently absent from the report (R6-1)
             "excluded_dir_modified": excl_mod,

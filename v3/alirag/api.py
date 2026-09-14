@@ -167,7 +167,7 @@ def serve(cfg: Config | None = None):
             "api_host is not loopback; refusing to expose the API without api_token "
             "(set api_token in config or ALIRAG_API_TOKEN)")
     uvicorn_kwargs = {}
-    if not is_loopback_host(cfg.api_host) and cfg.api_ssl_certfile:
+    if cfg.api_ssl_certfile:
         uvicorn_kwargs["ssl_certfile"] = cfg.api_ssl_certfile
         uvicorn_kwargs["ssl_keyfile"] = cfg.api_ssl_keyfile
     elif not is_loopback_host(cfg.api_host) and cfg.api_token:

@@ -51,7 +51,7 @@ def test_excluded_log_addition_passes(tmp_path):
 
     assert result["pass"] is True
     assert result["verdict"] == "PASS_WITH_EXCLUSIONS"
-    assert str(added) in result["excluded_added"]
+    assert str(added) in result["excluded_dir_added"]
 
 
 def test_excluded_document_addition_fails(tmp_path):
@@ -66,5 +66,5 @@ def test_excluded_document_addition_fails(tmp_path):
     result = guard.verify_snapshot(snap)
 
     assert result["pass"] is False
-    assert str(added) in result["excluded_added"]
+    assert str(added) in result["excluded_dir_added"]
     assert str(added) in result["excluded_dir_documents_added"]
